@@ -1,0 +1,256 @@
+Sections:
+00: "org0001:801" (801-A3F)
+
+
+Source: "./border-sprites.asm"
+                        	     1:         ;; Sprites in the top & bottom borders
+                        	     2:         
+                        	     3:         ;; Observations:
+                        	     4:         ;; - y coordinates  0-14: bottom border (15 px)
+                        	     5:         ;;                 15-30: bottom border, repeats in top border (16 px)
+                        	     6:         ;; - y coordinates 31-49: top border (19 px)
+                        	     7: 
+                        	     8:         ;; Symbol definitions
+                        	     9: cinv:   equ $0314
+                        	    10: sp0ptr: equ $07f8
+                        	    11: vic:    equ $d000
+                        	    12: sp0x:   equ vic
+                        	    13: sp0y:   equ vic + $01
+                        	    14: sp1x:   equ vic + $02
+                        	    15: sp1y:   equ vic + $03
+                        	    16: sp2x:   equ vic + $04
+                        	    17: sp2y:   equ vic + $05
+                        	    18: sp3x:   equ vic + $06
+                        	    19: sp3y:   equ vic + $07
+                        	    20: sp4x:   equ vic + $08
+                        	    21: sp4y:   equ vic + $09
+                        	    22: sp5x:   equ vic + $0a
+                        	    23: sp5y:   equ vic + $0b
+                        	    24: sp6x:   equ vic + $0c
+                        	    25: sp6y:   equ vic + $0d
+                        	    26: sp7x:   equ vic + $0e
+                        	    27: sp7y:   equ vic + $0f
+                        	    28: scroly: equ vic + $11
+                        	    29: raster: equ vic + $12
+                        	    30: spena:  equ vic + $15
+                        	    31: vicirq: equ vic + $19
+                        	    32: irqmsk: equ vic + $1a
+                        	    33: sp0col: equ vic + $27
+                        	    34: ci1icr: equ $dc0d
+                        	    35: sysirq: equ $ea7e
+                        	    36: linclr: equ 249
+                        	    37: linset: equ 255
+                        	    38:         
+                        	    39:         ;; Start of code
+                        	    40:         org $0801
+                        	    41: 
+                        	    42:         ;; BASIC header                                                                        
+00:0801 0B08            	    43:         word nxl,10
+00:0803 0A00
+00:0805 9E              	    44:         byte $9e
+00:0806 32303631        	    45:         string "2061"
+00:080A 00
+00:080B 0000            	    46: nxl:    word 0
+                        	    47: 
+                        	    48:         ;; Initialization
+00:080D A900            	    49:         lda #0
+00:080F 8DFF3F          	    50:         sta $3fff               ;ensure no garbage in borders        
+00:0812 202208          	    51:         jsr setupspr            ;setup sprites
+00:0815 209D08          	    52:         jsr setupirq            ;setup IRQ handler
+                        	    53:         
+                        	    54:         ;; Busy loop
+00:0818 EA              	    55: loop:   nop
+00:0819 EA              	    56:         nop
+00:081A EA              	    57:         nop
+00:081B EA              	    58:         nop
+00:081C EA              	    59:         nop
+00:081D EA              	    60:         nop
+00:081E EA              	    61:         nop
+00:081F 4C1808          	    62:         jmp loop
+                        	    63: 
+                        	    64:         ;; Setup sprites
+                        	    65: setupspr:
+                        	    66:         ;; enable all 8 sprites
+00:0822 A9FF            	    67:         lda #$ff
+00:0824 8D15D0          	    68:         sta spena
+                        	    69:         ;; set sprite colours
+00:0827 A900            	    70:         lda #0
+00:0829 8D27D0          	    71:         sta sp0col
+00:082C 8D28D0          	    72:         sta sp0col + 1
+00:082F 8D29D0          	    73:         sta sp0col + 2
+00:0832 8D2AD0          	    74:         sta sp0col + 3
+00:0835 A901            	    75:         lda #1
+00:0837 8D2BD0          	    76:         sta sp0col + 4
+00:083A 8D2CD0          	    77:         sta sp0col + 5
+00:083D 8D2DD0          	    78:         sta sp0col + 6
+00:0840 8D2ED0          	    79:         sta sp0col + 7
+                        	    80:         ;; set sprite pointers
+00:0843 A924            	    81:         lda #sp0def/64
+00:0845 8DF807          	    82:         sta sp0ptr
+00:0848 8DF907          	    83:         sta sp0ptr + 1
+00:084B 8DFA07          	    84:         sta sp0ptr + 2
+00:084E 8DFB07          	    85:         sta sp0ptr + 3          ;first 4 sprites use shape 0
+00:0851 A928            	    86:         lda #sp1def/64
+00:0853 8DFC07          	    87:         sta sp0ptr + 4
+00:0856 8DFD07          	    88:         sta sp0ptr + 5
+00:0859 8DFE07          	    89:         sta sp0ptr + 6
+00:085C 8DFF07          	    90:         sta sp0ptr + 7          ;last 4 sprites use shape 1
+                        	    91:         ;; set sprite x coordinates
+00:085F 18              	    92:         clc
+00:0860 A918            	    93:         lda #24
+00:0862 8D00D0          	    94:         sta sp0x
+00:0865 8D08D0          	    95:         sta sp4x                ;sprites 0 & 4 at x=24
+00:0868 6932            	    96:         adc #50
+00:086A 8D02D0          	    97:         sta sp1x
+00:086D 8D0AD0          	    98:         sta sp5x                ;sprites 1 & 5 at x=74
+00:0870 6932            	    99:         adc #50
+00:0872 8D04D0          	   100:         sta sp2x
+00:0875 8D0CD0          	   101:         sta sp6x                ;sprites 2 & 6 at x=124
+00:0878 6932            	   102:         adc #50
+00:087A 8D06D0          	   103:         sta sp3x
+00:087D 8D0ED0          	   104:         sta sp7x                ;sprites 3 & 7 at x=174
+                        	   105:         ;; set sprite y coordinates
+00:0880 A91F            	   106:         lda #31
+00:0882 8D01D0          	   107:         sta sp0y
+00:0885 8D03D0          	   108:         sta sp1y
+00:0888 8D05D0          	   109:         sta sp2y
+00:088B 8D07D0          	   110:         sta sp3y                ;first 4 sprites at y=31 (top border)
+00:088E A900            	   111:         lda #0
+00:0890 8D09D0          	   112:         sta sp4y
+00:0893 8D0BD0          	   113:         sta sp5y
+00:0896 8D0DD0          	   114:         sta sp6y
+00:0899 8D0FD0          	   115:         sta sp7y                ;last 4 sprites at y=0 (bottom border)
+00:089C 60              	   116:         rts
+                        	   117:         
+                        	   118:         ;; Setup IRQ handler
+                        	   119: setupirq:
+00:089D 78              	   120:         sei
+00:089E A97F            	   121:         lda #$7f
+00:08A0 8D0DDC          	   122:         sta ci1icr              ;enable IRQs
+00:08A3 A901            	   123:         lda #$01
+00:08A5 8D1AD0          	   124:         sta irqmsk              ;enable raster IRQ
+00:08A8 A91B            	   125:         lda #$1b
+00:08AA 8D11D0          	   126:         sta scroly              ;clear scroly high bit
+00:08AD A9FF            	   127:         lda #linset
+00:08AF 8D12D0          	   128:         sta raster              ;set scanline for next raster IRQ
+00:08B2 A9BE            	   129:         lda #<procirq
+00:08B4 8D1403          	   130:         sta cinv
+00:08B7 A908            	   131:         lda #>procirq
+00:08B9 8D1503          	   132:         sta cinv+1              ;set IRQ handler
+00:08BC 58              	   133:         cli
+00:08BD 60              	   134:         rts
+                        	   135: 
+                        	   136:         ;; IRQ handler
+                        	   137: procirq:
+00:08BE AD12D0          	   138:         lda raster
+00:08C1 C9FF            	   139:         cmp #linset
+00:08C3 F010            	   140:         beq setbit
+                        	   141:         ;; Clear bit 3 of scroly
+00:08C5 AD11D0          	   142:         lda scroly
+00:08C8 29F7            	   143:         and #%11110111
+00:08CA 8D11D0          	   144:         sta scroly
+00:08CD A9FF            	   145:         lda #linset
+00:08CF 8D12D0          	   146:         sta raster              ;next IRQ at linset
+00:08D2 4CE208          	   147:         jmp finirq
+                        	   148:         ;; Set bit 3 of scroly
+00:08D5 AD11D0          	   149: setbit: lda scroly
+00:08D8 0908            	   150:         ora #%00001000
+00:08DA 8D11D0          	   151:         sta scroly
+00:08DD A9F9            	   152:         lda #linclr
+00:08DF 8D12D0          	   153:         sta raster              ;next IRQ at linclr
+00:08E2 0E19D0          	   154: finirq: asl vicirq              ;ACK raster IRQ
+00:08E5 4C7EEA          	   155:         jmp sysirq
+                        	   156: 
+                        	   157:         ;; Sprite shape definitions
+                        	   158:         align 8
+00:0900 FF              	   159: sp0def: blk 57,$ff
+00:0901 *
+00:0939 00              	   160:         blk 6,$00
+00:093A *
+                        	   161:         align 8
+00:0A00 FF              	   162: sp1def: blk 45,$ff
+00:0A01 *
+00:0A2D 00              	   163:         blk 18,$00
+00:0A2E *
+                        	   164: 
+
+
+Symbols by name:
+ci1icr                           E:DC0D
+cinv                             E:0314
+finirq                           A:08E2
+irqmsk                           E:D01A
+linclr                           E:00F9
+linset                           E:00FF
+loop                             A:0818
+nxl                              A:080B
+procirq                          A:08BE
+raster                           E:D012
+scroly                           E:D011
+setbit                           A:08D5
+setupirq                         A:089D
+setupspr                         A:0822
+sp0col                           E:D027
+sp0def                           A:0900
+sp0ptr                           E:07F8
+sp0x                             E:D000
+sp0y                             E:D001
+sp1def                           A:0A00
+sp1x                             E:D002
+sp1y                             E:D003
+sp2x                             E:D004
+sp2y                             E:D005
+sp3x                             E:D006
+sp3y                             E:D007
+sp4x                             E:D008
+sp4y                             E:D009
+sp5x                             E:D00A
+sp5y                             E:D00B
+sp6x                             E:D00C
+sp6y                             E:D00D
+sp7x                             E:D00E
+sp7y                             E:D00F
+spena                            E:D015
+sysirq                           E:EA7E
+vic                              E:D000
+vicirq                           E:D019
+
+Symbols by value:
+00F9 linclr
+00FF linset
+0314 cinv
+07F8 sp0ptr
+080B nxl
+0818 loop
+0822 setupspr
+089D setupirq
+08BE procirq
+08D5 setbit
+08E2 finirq
+0900 sp0def
+0A00 sp1def
+D000 sp0x
+D000 vic
+D001 sp0y
+D002 sp1x
+D003 sp1y
+D004 sp2x
+D005 sp2y
+D006 sp3x
+D007 sp3y
+D008 sp4x
+D009 sp4y
+D00A sp5x
+D00B sp5y
+D00C sp6x
+D00D sp6y
+D00E sp7x
+D00F sp7y
+D011 scroly
+D012 raster
+D015 spena
+D019 vicirq
+D01A irqmsk
+D027 sp0col
+DC0D ci1icr
+EA7E sysirq
