@@ -6,44 +6,44 @@
         ;; - y coordinates 31-49: top border (19 px)
 
         ;; Symbol definitions
-cinv:   equ $0314
-sp0ptr: equ $07f8
-vic:    equ $d000
-sp0x:   equ vic
-sp0y:   equ vic + $01
-sp1x:   equ vic + $02
-sp1y:   equ vic + $03
-sp2x:   equ vic + $04
-sp2y:   equ vic + $05
-sp3x:   equ vic + $06
-sp3y:   equ vic + $07
-sp4x:   equ vic + $08
-sp4y:   equ vic + $09
-sp5x:   equ vic + $0a
-sp5y:   equ vic + $0b
-sp6x:   equ vic + $0c
-sp6y:   equ vic + $0d
-sp7x:   equ vic + $0e
-sp7y:   equ vic + $0f
-scroly: equ vic + $11
-raster: equ vic + $12
-spena:  equ vic + $15
-vicirq: equ vic + $19
-irqmsk: equ vic + $1a
-sp0col: equ vic + $27
-ci1icr: equ $dc0d
-sysirq: equ $ea7e
-linclr: equ 249
-linset: equ 255
+cinv:   .equ $0314
+sp0ptr: .equ $07f8
+vic:    .equ $d000
+sp0x:   .equ vic
+sp0y:   .equ vic + $01
+sp1x:   .equ vic + $02
+sp1y:   .equ vic + $03
+sp2x:   .equ vic + $04
+sp2y:   .equ vic + $05
+sp3x:   .equ vic + $06
+sp3y:   .equ vic + $07
+sp4x:   .equ vic + $08
+sp4y:   .equ vic + $09
+sp5x:   .equ vic + $0a
+sp5y:   .equ vic + $0b
+sp6x:   .equ vic + $0c
+sp6y:   .equ vic + $0d
+sp7x:   .equ vic + $0e
+sp7y:   .equ vic + $0f
+scroly: .equ vic + $11
+raster: .equ vic + $12
+spena:  .equ vic + $15
+vicirq: .equ vic + $19
+irqmsk: .equ vic + $1a
+sp0col: .equ vic + $27
+ci1icr: .equ $dc0d
+sysirq: .equ $ea7e
+linclr: .equ 249
+linset: .equ 255
         
         ;; Start of code
-        org $0801
+        .org $0801
 
         ;; BASIC header                                                                        
-        word nxl,10
-        byte $9e
-        string "2061"
-nxl:    word 0
+        .word nxl,10
+        .byte $9e
+        .string "2061"
+nxl:    .word 0
 
         ;; Initialization
         lda #0
@@ -155,9 +155,9 @@ finirq: asl vicirq              ;ACK raster IRQ
         jmp sysirq
 
         ;; Sprite shape definitions
-        align 8
-sp0def: blk 57,$ff
-        blk 6,$00
-        align 8
-sp1def: blk 45,$ff
-        blk 18,$00
+        .align 8
+sp0def: .blk 57,$ff
+        .blk 6,$00
+        .align 8
+sp1def: .blk 45,$ff
+        .blk 18,$00

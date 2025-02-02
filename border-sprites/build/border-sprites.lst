@@ -2,7 +2,7 @@ Sections:
 00: "org0001:801" (801-A3F)
 
 
-Source: "./border-sprites.asm"
+Source: "src/border-sprites.asm"
                         	     1:         ;; Sprites in the top & bottom borders
                         	     2:         
                         	     3:         ;; Observations:
@@ -11,46 +11,46 @@ Source: "./border-sprites.asm"
                         	     6:         ;; - y coordinates 31-49: top border (19 px)
                         	     7: 
                         	     8:         ;; Symbol definitions
-                        	     9: cinv:   equ $0314
-                        	    10: sp0ptr: equ $07f8
-                        	    11: vic:    equ $d000
-                        	    12: sp0x:   equ vic
-                        	    13: sp0y:   equ vic + $01
-                        	    14: sp1x:   equ vic + $02
-                        	    15: sp1y:   equ vic + $03
-                        	    16: sp2x:   equ vic + $04
-                        	    17: sp2y:   equ vic + $05
-                        	    18: sp3x:   equ vic + $06
-                        	    19: sp3y:   equ vic + $07
-                        	    20: sp4x:   equ vic + $08
-                        	    21: sp4y:   equ vic + $09
-                        	    22: sp5x:   equ vic + $0a
-                        	    23: sp5y:   equ vic + $0b
-                        	    24: sp6x:   equ vic + $0c
-                        	    25: sp6y:   equ vic + $0d
-                        	    26: sp7x:   equ vic + $0e
-                        	    27: sp7y:   equ vic + $0f
-                        	    28: scroly: equ vic + $11
-                        	    29: raster: equ vic + $12
-                        	    30: spena:  equ vic + $15
-                        	    31: vicirq: equ vic + $19
-                        	    32: irqmsk: equ vic + $1a
-                        	    33: sp0col: equ vic + $27
-                        	    34: ci1icr: equ $dc0d
-                        	    35: sysirq: equ $ea7e
-                        	    36: linclr: equ 249
-                        	    37: linset: equ 255
+                        	     9: cinv:   .equ $0314
+                        	    10: sp0ptr: .equ $07f8
+                        	    11: vic:    .equ $d000
+                        	    12: sp0x:   .equ vic
+                        	    13: sp0y:   .equ vic + $01
+                        	    14: sp1x:   .equ vic + $02
+                        	    15: sp1y:   .equ vic + $03
+                        	    16: sp2x:   .equ vic + $04
+                        	    17: sp2y:   .equ vic + $05
+                        	    18: sp3x:   .equ vic + $06
+                        	    19: sp3y:   .equ vic + $07
+                        	    20: sp4x:   .equ vic + $08
+                        	    21: sp4y:   .equ vic + $09
+                        	    22: sp5x:   .equ vic + $0a
+                        	    23: sp5y:   .equ vic + $0b
+                        	    24: sp6x:   .equ vic + $0c
+                        	    25: sp6y:   .equ vic + $0d
+                        	    26: sp7x:   .equ vic + $0e
+                        	    27: sp7y:   .equ vic + $0f
+                        	    28: scroly: .equ vic + $11
+                        	    29: raster: .equ vic + $12
+                        	    30: spena:  .equ vic + $15
+                        	    31: vicirq: .equ vic + $19
+                        	    32: irqmsk: .equ vic + $1a
+                        	    33: sp0col: .equ vic + $27
+                        	    34: ci1icr: .equ $dc0d
+                        	    35: sysirq: .equ $ea7e
+                        	    36: linclr: .equ 249
+                        	    37: linset: .equ 255
                         	    38:         
                         	    39:         ;; Start of code
-                        	    40:         org $0801
+                        	    40:         .org $0801
                         	    41: 
                         	    42:         ;; BASIC header                                                                        
-00:0801 0B08            	    43:         word nxl,10
+00:0801 0B08            	    43:         .word nxl,10
 00:0803 0A00
-00:0805 9E              	    44:         byte $9e
-00:0806 32303631        	    45:         string "2061"
+00:0805 9E              	    44:         .byte $9e
+00:0806 32303631        	    45:         .string "2061"
 00:080A 00
-00:080B 0000            	    46: nxl:    word 0
+00:080B 0000            	    46: nxl:    .word 0
                         	    47: 
                         	    48:         ;; Initialization
 00:080D A900            	    49:         lda #0
@@ -162,15 +162,15 @@ Source: "./border-sprites.asm"
 00:08E5 4C7EEA          	   155:         jmp sysirq
                         	   156: 
                         	   157:         ;; Sprite shape definitions
-                        	   158:         align 8
-00:0900 FF              	   159: sp0def: blk 57,$ff
+                        	   158:         .align 8
+00:0900 FF              	   159: sp0def: .blk 57,$ff
 00:0901 *
-00:0939 00              	   160:         blk 6,$00
+00:0939 00              	   160:         .blk 6,$00
 00:093A *
-                        	   161:         align 8
-00:0A00 FF              	   162: sp1def: blk 45,$ff
+                        	   161:         .align 8
+00:0A00 FF              	   162: sp1def: .blk 45,$ff
 00:0A01 *
-00:0A2D 00              	   163:         blk 18,$00
+00:0A2D 00              	   163:         .blk 18,$00
 00:0A2E *
                         	   164: 
 
