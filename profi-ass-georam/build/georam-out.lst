@@ -3,9 +3,9 @@ Sections:
 
 
 Source: "src/georam-out.asm"
-                        	     1:         ;; GEOram output module for Profi-Ass
-                        	     2:         ;; ----------------------------------
-                        	     3:         ;; Called by Profi-Ass; writes object code to GEOram.
+                        	     1:         ;; GEOram output module for Profi-Ass v2
+                        	     2:         ;; -------------------------------------
+                        	     3:         ;; A plugin for Profi-Ass v2 to write object code to GEOram.
                         	     4:         ;; 
                         	     5:         ;; Format:
                         	     6:         ;; +-------------+---------------+-------------+

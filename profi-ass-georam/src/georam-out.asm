@@ -1,6 +1,6 @@
-        ;; GEOram output module for Profi-Ass
-        ;; ----------------------------------
-        ;; Called by Profi-Ass; writes object code to GEOram.
+        ;; GEOram output module for Profi-Ass v2
+        ;; -------------------------------------
+        ;; A plugin for Profi-Ass v2 to write object code to GEOram.
         ;; 
         ;; Format:
         ;; +-------------+---------------+-------------+
