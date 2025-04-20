@@ -380,7 +380,7 @@ Source: "src/multi2.asm"
 01:1224 A969            	   373:                 lda #<irq2
 01:1226 8D1403          	   374:                 sta cinv
 01:1229 A913            	   375:                 lda #>irq2
-01:122B 8D1503          	   376:                 sta $0315
+01:122B 8D1503          	   376:                 sta cinv+1
                         	   377: irq1_sortsprstart:
 01:122E A200            	   378:                 ldx #$00                    ;Go through the first sprite IRQ immediately
                         	   379:                 .if SHOW_RASTIME>0
@@ -534,7 +534,7 @@ Source: "src/multi2.asm"
 01:1378 A910            	   527:                 lda #IRQ1LINE
 01:137A 8D12D0          	   528:                 sta raster
 01:137D EE19D0          	   529:                 inc vicirq
-01:1380 4C81EA          	   530:                 jmp sysirq                  ;All spriteIRQ's done, return to the top of screen IRQ
+01:1380 4C81EA          	   530:                 jmp sysirq                  ;All sprite IRQ's done, return to the top of screen IRQ
                         	   531: 
                         	   532:         ;; Tables
                         	   533: 
