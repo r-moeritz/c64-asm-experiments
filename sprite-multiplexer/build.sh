@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 
-NAME=multi2
+NAMES='multi multi2'
 
-vasm6502_oldstyle -cbm-prg -Fbin -chklabels -nocase -dotdir \
-                  src/$NAME.asm -o build/$NAME.bin -L build/$NAME.lst \
-    && pucrunch -x4096 build/$NAME.bin build/$NAME.prg 
+for name in $NAMES
+do
+    vasm6502_oldstyle -cbm-prg -Fbin -chklabels -nocase -dotdir \
+                  src/$name.asm -o build/$name.bin -L build/$name.lst \
+    && pucrunch -m5 -x4096 build/$name.bin build/$name.prg 
+done

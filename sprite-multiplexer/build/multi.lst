@@ -1,0 +1,656 @@
+Sections:
+00: "org0001:fc0" (FC0-1000)
+01: "org0002:1000" (1000-134A)
+
+
+Source: "src/multi.asm"
+                        	     1: ;------------------------------------------------------------------------------;
+                        	     2: ; Spritemultiplexing example V2.1                                              ;
+                        	     3: ; by Lasse Oorni (loorni@gmail.com)                                            ;
+                        	     4: ; Available at http://cadaver.github.io                                        ;
+                        	     5: ;                                                                              ;
+                        	     6: ; Quite easy (?) to understand example how to make a spritemultiplexer,        ;
+                        	     7: ; using 32 sprites. The routine is capable of more but the screen starts       ;
+                        	     8: ; to become very crowded, as they move randomly...                             ;
+                        	     9: ;                                                                              ;
+                        	    10: ; Uses a "new" more optimal sortmethod that doesn't take as much time          ;
+                        	    11: ; as bubblesort. This method is based on the idea of an orderlist that         ;
+                        	    12: ; is not recreated from scratch each frame; but instead modified every         ;
+                        	    13: ; frame to create correct top-bottom order of sprites.                         ;
+                        	    14: ;                                                                              ;
+                        	    15: ; Why sorted top-bottom order of sprites is necessary for multiplexing:        ;
+                        	    16: ; because raster interrupts are used to "rewrite" the sprite registers         ;
+                        	    17: ; in the middle of the screen and raster interrupts follow the                 ;
+                        	    18: ; top->bottom movement of the TV/monitor electron gun as it draws each         ;
+                        	    19: ; frame.                                                                       ;
+                        	    20: ;                                                                              ;
+                        	    21: ; Light grey color in the bottom of the screen measures the time taken         ;
+                        	    22: ; by sprite sorting.                                                           ;
+                        	    23: ;                                                                              ;
+                        	    24: ; What is missing from this tutorial for sake of simplicity:                   ;
+                        	    25: ; * 16-bit X coordinates (it's now multiplying the X-coord by 2)               ;
+                        	    26: ; * Elimination of "extra" (more than 8) sprites on a row                      ;
+                        	    27: ;                                                                              ;
+                        	    28: ; Original code by Lasse Oorni.                                                ;
+                        	    29: ;                                                                              ;
+                        	    30: ; Converted to vasm format & replaced register addresses with                  ;
+                        	    31: ; symbols by Ralph Moeritz.                                                    ;
+                        	    32: ;------------------------------------------------------------------------------;
+                        	    33: 
+                        	    34:         ;; VIC-II registers
+                        	    35:         
+                        	    36: vic:            .equ $d000
+                        	    37: sp0x:           .equ vic
+                        	    38: sp0y:           .equ vic + $01
+                        	    39: sp1x:           .equ vic + $02
+                        	    40: sp1y:           .equ vic + $03
+                        	    41: sp2x:           .equ vic + $04
+                        	    42: sp2y:           .equ vic + $05
+                        	    43: sp3x:           .equ vic + $06
+                        	    44: sp3y:           .equ vic + $07
+                        	    45: sp4x:           .equ vic + $08
+                        	    46: sp4y:           .equ vic + $09
+                        	    47: sp5x:           .equ vic + $0a
+                        	    48: sp5y:           .equ vic + $0b
+                        	    49: sp6x:           .equ vic + $0c
+                        	    50: sp6y:           .equ vic + $0d
+                        	    51: sp7x:           .equ vic + $0e
+                        	    52: sp7y:           .equ vic + $0f
+                        	    53: msigx:          .equ vic + $10
+                        	    54: scroly:         .equ vic + $11
+                        	    55: raster:         .equ vic + $12
+                        	    56: spena:          .equ vic + $15
+                        	    57: vicirq:         .equ vic + $19
+                        	    58: irqmsk:         .equ vic + $1a
+                        	    59: extcol:         .equ vic + $20
+                        	    60: sp0col:         .equ vic + $27
+                        	    61: sp1col:         .equ vic + $28
+                        	    62: sp2col:         .equ vic + $29
+                        	    63: sp3col:         .equ vic + $2a
+                        	    64: sp4col:         .equ vic + $2b
+                        	    65: sp5col:         .equ vic + $2c
+                        	    66: sp6col:         .equ vic + $2d
+                        	    67: sp7col:         .equ vic + $2e
+                        	    68: sp0ptr:         .equ $07f8
+                        	    69:         
+                        	    70:         ;; CIA 1 registers
+                        	    71: 
+                        	    72: cia1:           .equ $dc00
+                        	    73: ci1icr:         .equ cia1 + $0d
+                        	    74: 
+                        	    75:         ;; System memory definitions
+                        	    76:         
+                        	    77: cinv:           .equ $0314      ;IRQ vector
+                        	    78: sysirq:         .equ $ea81      ;Kernal IRQ handler
+                        	    79: 
+                        	    80:         ;; Constants
+                        	    81: 
+                        	    82: IRQ1LINE        .equ $fc           ;This is the place on screen where the sorting
+                        	    83:                                    ;IRQ happens
+                        	    84: IRQ2LINE        .equ $2a           ;This is where sprite displaying begins...
+                        	    85: 
+                        	    86: MAXSPR          .equ 32            ;Maximum number of sprites
+                        	    87: 
+                        	    88:         ;; Zero-Page
+                        	    89:         
+                        	    90: numsprites      .equ $02           ;Number of sprites that the main program wants
+                        	    91:                                    ;to pass to the sprite sorter
+                        	    92: sprupdateflag   .equ $03           ;Main program must write a nonzero value here
+                        	    93:                                    ;when it wants new sprites to be displayed
+                        	    94: sortedsprites   .equ $04           ;Number of sorted sprites for the raster
+                        	    95:                                    ;interrupt
+                        	    96: tempvariable    .equ $05           ;Just a temp variable used by the raster
+                        	    97:                                    ;interrupt
+                        	    98: sprirqcounter   .equ $06           ;Sprite counter used by the interrupt
+                        	    99: 
+                        	   100: sortorder       .equ $10           ;Order-table for sorting. Needs as many bytes
+                        	   101: sortorderlast   .equ $2f           ;as there are sprites.
+                        	   102: 
+                        	   103:         ;; Sprite shape definition
+                        	   104:         
+                        	   105:                 .org $0fc0
+                        	   106: 
+00:0FC0 FF              	   107:                 .blk 64,$ff        ;Our sprite. Really complex design :-)
+00:0FC1 *
+                        	   108: 
+                        	   109:         ;; Main program
+                        	   110:         
+                        	   111:                 .org $1000
+                        	   112: 
+01:1000 207310          	   113: start:          jsr initsprites             ;Init the multiplexing-system
+01:1003 204F10          	   114:                 jsr initraster
+01:1006 A220            	   115:                 ldx #MAXSPR                 ;Use all sprites
+01:1008 8602            	   116:                 stx numsprites
+                        	   117: 
+01:100A CA              	   118:                 dex
+01:100B BD00E0          	   119: initloop:       lda $e000,x                     ;Init sprites with some random
+01:100E 9DB011          	   120:                 sta sprx,x                      ;values from the KERNAL
+01:1011 BD10E0          	   121:                 lda $e010,x
+01:1014 9DD011          	   122:                 sta spry,x
+01:1017 A93F            	   123:                 lda #$3f
+01:1019 9D1012          	   124:                 sta sprf,x
+01:101C 8A              	   125:                 txa
+01:101D C906            	   126:                 cmp #$06                        ;Blue is the default background
+01:101F D002            	   127:                 bne colorok                     ;color, so sprite would look
+01:1021 A905            	   128:                 lda #$05                        ;invisible :-)
+01:1023 9DF011          	   129: colorok:        sta sprc,x
+01:1026 CA              	   130:                 dex
+01:1027 10E2            	   131:                 bpl initloop
+                        	   132: 
+01:1029 E603            	   133: mainloop:       inc sprupdateflag               ;Signal to IRQ: sort the
+                        	   134:                                                 ;sprites
+01:102B A503            	   135: waitloop:       lda sprupdateflag               ;Wait until the flag turns back
+01:102D D0FC            	   136:                 bne waitloop                    ;to zero
+01:102F A21F            	   137:                 ldx #MAXSPR-1
+01:1031 BD40E0          	   138: moveloop:       lda $e040,x                     ;Move the sprites with some
+01:1034 2903            	   139:                 and #$03                        ;random speeds
+01:1036 38              	   140:                 sec
+01:1037 7DB011          	   141:                 adc sprx,x
+01:103A 9DB011          	   142:                 sta sprx,x
+01:103D BD50E0          	   143:                 lda $e050,x
+01:1040 2901            	   144:                 and #$01
+01:1042 38              	   145:                 sec
+01:1043 7DD011          	   146:                 adc spry,x
+01:1046 9DD011          	   147:                 sta spry,x
+01:1049 CA              	   148:                 dex
+01:104A 10E5            	   149:                 bpl moveloop
+01:104C 4C2910          	   150:                 jmp mainloop                    ;Back to loop
+                        	   151: 
+                        	   152:         ;Routine to init the raster interrupt system
+                        	   153: 
+01:104F 78              	   154: initraster:     sei
+01:1050 A982            	   155:                 lda #<irq1
+01:1052 8D1403          	   156:                 sta cinv
+01:1055 A910            	   157:                 lda #>irq1
+01:1057 8D1503          	   158:                 sta cinv+1
+01:105A A97F            	   159:                 lda #$7f                    ;CIA interrupt off
+01:105C 8D0DDC          	   160:                 sta ci1icr
+01:105F A901            	   161:                 lda #$01                    ;Raster interrupt on
+01:1061 8D1AD0          	   162:                 sta irqmsk
+01:1064 A91B            	   163:                 lda #27                     ;High bit of interrupt position = 0
+01:1066 8D11D0          	   164:                 sta scroly
+01:1069 A9FC            	   165:                 lda #IRQ1LINE               ;Line where next IRQ happens
+01:106B 8D12D0          	   166:                 sta raster
+01:106E AD0DDC          	   167:                 lda ci1icr                  ;Acknowledge IRQ (to be sure)
+01:1071 58              	   168:                 cli
+01:1072 60              	   169:                 rts
+                        	   170: 
+                        	   171:         ;Routine to init the sprite multiplexing system
+                        	   172: 
+01:1073 A900            	   173: initsprites:    lda #$00
+01:1075 8504            	   174:                 sta sortedsprites
+01:1077 8503            	   175:                 sta sprupdateflag
+01:1079 A21F            	   176:                 ldx #MAXSPR-1                   ;Init the order table with a
+01:107B 8A              	   177: is_orderlist:   txa                             ;0,1,2,3,4,5... order
+01:107C 9510            	   178:                 sta sortorder,x
+01:107E CA              	   179:                 dex
+01:107F 10FA            	   180:                 bpl is_orderlist
+01:1081 60              	   181:                 rts
+                        	   182: 
+                        	   183:         ;Raster interrupt 1. This is where sorting happens.
+                        	   184: 
+01:1082 CE19D0          	   185: irq1:           dec vicirq                      ;Acknowledge raster interrupt
+01:1085 A9FF            	   186:                 lda #$ff                        ;Move all sprites
+01:1087 8D01D0          	   187:                 sta sp0y                        ;to the bottom to prevent
+01:108A 8D03D0          	   188:                 sta sp1y                        ;weird effects when sprite
+01:108D 8D05D0          	   189:                 sta sp2y                        ;moves lower than what it
+01:1090 8D07D0          	   190:                 sta sp3y                        ;previously was
+01:1093 8D09D0          	   191:                 sta sp4y
+01:1096 8D0BD0          	   192:                 sta sp5y
+01:1099 8D0DD0          	   193:                 sta sp6y
+01:109C 8D0FD0          	   194:                 sta sp7y
+                        	   195: 
+01:109F A503            	   196:                 lda sprupdateflag               ;New sprites to be sorted?
+01:10A1 F00A            	   197:                 beq irq1_nonewsprites
+01:10A3 A900            	   198:                 lda #$00
+01:10A5 8503            	   199:                 sta sprupdateflag
+01:10A7 A502            	   200:                 lda numsprites                  ;Take number of sprites given
+                        	   201:                                                 ;by the main program
+01:10A9 8504            	   202:                 sta sortedsprites               ;If itïs zero, donït need to
+01:10AB D024            	   203:                 bne irq1_beginsort              ;sort
+                        	   204: 
+                        	   205: irq1_nonewsprites:
+01:10AD A604            	   206:                 ldx sortedsprites
+01:10AF E009            	   207:                 cpx #$09
+01:10B1 9002            	   208:                 bcc irq1_notmorethan8
+01:10B3 A208            	   209:                 ldx #$08
+                        	   210: irq1_notmorethan8:
+01:10B5 BDB112          	   211:                 lda spenatbl,x                   ;Now put the right value to
+01:10B8 8D15D0          	   212:                 sta spena                       ;$d015, based on number of
+01:10BB F011            	   213:                 beq irq1_nospritesatall         ;sprites
+                        	   214:                                                 ;Now init the sprite-counter
+01:10BD A900            	   215:                 lda #$00                        ;for the actual sprite display
+01:10BF 8506            	   216:                 sta sprirqcounter               ;routine
+01:10C1 A93C            	   217:                 lda #<irq2                      ;Set up the sprite display IRQ
+01:10C3 8D1403          	   218:                 sta cinv
+01:10C6 A911            	   219:                 lda #>irq2
+01:10C8 8D1503          	   220:                 sta cinv+1
+01:10CB 4C3F11          	   221:                 jmp irq2_direct                 ;Go directly; we might be late
+                        	   222: irq1_nospritesatall:
+01:10CE 4C81EA          	   223:                 jmp sysirq
+                        	   224: 
+01:10D1 A220            	   225: irq1_beginsort: ldx #MAXSPR
+01:10D3 CA              	   226:                 dex
+01:10D4 E404            	   227:                 cpx sortedsprites
+01:10D6 900A            	   228:                 bcc irq1_cleardone
+01:10D8 A9FF            	   229:                 lda #$ff                        ;Mark unused sprites with the
+01:10DA 9DD011          	   230: irq1_clearloop: sta spry,x                      ;lowest Y-coordinate ($ff);
+01:10DD CA              	   231:                 dex                             ;these will "fall" to the
+01:10DE E404            	   232:                 cpx sortedsprites               ;bottom of the sorted table
+01:10E0 B0F8            	   233:                 bcs irq1_clearloop
+01:10E2 A200            	   234: irq1_cleardone: ldx #$00
+01:10E4 B411            	   235: irq1_sortloop:  ldy sortorder+1,x               ;Sorting code. Algorithm
+01:10E6 B9D011          	   236:                 lda spry,y                      ;ripped from Dragon Breed :-)
+01:10E9 B410            	   237:                 ldy sortorder,x
+01:10EB D9D011          	   238:                 cmp spry,y
+01:10EE B01C            	   239:                 bcs irq1_sortskip
+01:10F0 8E0B11          	   240:                 stx irq1_sortreload+1
+01:10F3 B511            	   241: irq1_sortswap:  lda sortorder+1,x
+01:10F5 9510            	   242:                 sta sortorder,x
+01:10F7 9411            	   243:                 sty sortorder+1,x
+01:10F9 E000            	   244:                 cpx #$00
+01:10FB F00D            	   245:                 beq irq1_sortreload
+01:10FD CA              	   246:                 dex
+01:10FE B411            	   247:                 ldy sortorder+1,x
+01:1100 B9D011          	   248:                 lda spry,y
+01:1103 B410            	   249:                 ldy sortorder,x
+01:1105 D9D011          	   250:                 cmp spry,y
+01:1108 90E9            	   251:                 bcc irq1_sortswap
+01:110A A200            	   252: irq1_sortreload:ldx #$00
+01:110C E8              	   253: irq1_sortskip:  inx
+01:110D E01F            	   254:                 cpx #MAXSPR-1
+01:110F 90D3            	   255:                 bcc irq1_sortloop
+01:1111 A604            	   256:                 ldx sortedsprites
+01:1113 A9FF            	   257:                 lda #$ff                       ;$ff is the endmark for the
+01:1115 9D5012          	   258:                 sta sortspry,x                 ;sprite interrupt routine
+01:1118 A200            	   259:                 ldx #$00
+01:111A B410            	   260: irq1_sortloop3: ldy sortorder,x                ;Final loop:
+01:111C B9D011          	   261:                 lda spry,y                     ;Now copy sprite variables to
+01:111F 9D5012          	   262:                 sta sortspry,x                 ;the sorted table
+01:1122 B9B011          	   263:                 lda sprx,y
+01:1125 9D3012          	   264:                 sta sortsprx,x
+01:1128 B91012          	   265:                 lda sprf,y
+01:112B 9D9112          	   266:                 sta sortsprf,x
+01:112E B9F011          	   267:                 lda sprc,y
+01:1131 9D7112          	   268:                 sta sortsprc,x
+01:1134 E8              	   269:                 inx
+01:1135 E404            	   270:                 cpx sortedsprites
+01:1137 90E1            	   271:                 bcc irq1_sortloop3
+01:1139 4CAD10          	   272:                 jmp irq1_nonewsprites
+                        	   273: 
+                        	   274:         ;Raster interrupt 2. This is where sprite displaying happens
+                        	   275: 
+01:113C CE19D0          	   276: irq2:           dec vicirq                      ;Acknowledge raster interrupt
+01:113F A406            	   277: irq2_direct:    ldy sprirqcounter               ;Take next sorted sprite number
+01:1141 B95012          	   278:                 lda sortspry,y                  ;Take Y-coord of first new sprite
+01:1144 18              	   279:                 clc
+01:1145 6910            	   280:                 adc #$10                        ;16 lines down from there is
+01:1147 9002            	   281:                 bcc irq2_notover                ;the endpoint for this IRQ
+01:1149 A9FF            	   282:                 lda #$ff                        ;Endpoint canït be more than $ff
+01:114B 8505            	   283: irq2_notover:   sta tempvariable
+01:114D B95012          	   284: irq2_spriteloop:lda sortspry,y
+01:1150 C505            	   285:                 cmp tempvariable                ;End of this IRQ?
+01:1152 B036            	   286:                 bcs irq2_endspr
+01:1154 BEFA12          	   287:                 ldx physicalsprtbl2,y           ;Physical sprite number x 2
+01:1157 9D01D0          	   288:                 sta sp0y,x                     ;for X & Y coordinate
+01:115A B93012          	   289:                 lda sortsprx,y
+01:115D 0A              	   290:                 asl
+01:115E 9D00D0          	   291:                 sta sp0x,x
+01:1161 900C            	   292:                 bcc irq2_lowmsb
+01:1163 AD10D0          	   293:                 lda msigx
+01:1166 1D3B13          	   294:                 ora ortbl,x
+01:1169 8D10D0          	   295:                 sta msigx
+01:116C 4C7811          	   296:                 jmp irq2_msbok
+01:116F AD10D0          	   297: irq2_lowmsb:    lda msigx
+01:1172 3D3A13          	   298:                 and andtbl,x
+01:1175 8D10D0          	   299:                 sta msigx
+01:1178 BEBA12          	   300: irq2_msbok:     ldx physicalsprtbl1,y           ;Physical sprite number x 1
+01:117B B99112          	   301:                 lda sortsprf,y
+01:117E 9DF807          	   302:                 sta sp0ptr,x                    ;for color & frame
+01:1181 B97112          	   303:                 lda sortsprc,y
+01:1184 9D27D0          	   304:                 sta sp0col,x
+01:1187 C8              	   305:                 iny
+01:1188 D0C3            	   306:                 bne irq2_spriteloop
+01:118A C9FF            	   307: irq2_endspr:    cmp #$ff                        ;Was it the endmark?
+01:118C F010            	   308:                 beq irq2_lastspr
+01:118E 8406            	   309:                 sty sprirqcounter
+01:1190 38              	   310:                 sec                             ;That coordinate - $10 is the
+01:1191 E910            	   311:                 sbc #$10                        ;position for next interrupt
+01:1193 CD12D0          	   312:                 cmp raster                      ;Already late from that?
+01:1196 90A7            	   313:                 bcc irq2_direct                 ;Then go directly to next IRQ
+01:1198 8D12D0          	   314:                 sta raster
+01:119B 4C81EA          	   315:                 jmp sysirq
+01:119E A982            	   316: irq2_lastspr:   lda #<irq1                      ;Was the last sprite,
+01:11A0 8D1403          	   317:                 sta cinv                       ;go back to irq1
+01:11A3 A910            	   318:                 lda #>irq1                      ;(sorting interrupt)
+01:11A5 8D1503          	   319:                 sta cinv+1
+01:11A8 A9FC            	   320:                 lda #IRQ1LINE
+01:11AA 8D12D0          	   321:                 sta raster
+01:11AD 4C81EA          	   322:                 jmp sysirq
+                        	   323: 
+01:11B0 00              	   324: sprx:           .blk MAXSPR,0                   ;Unsorted sprite table
+01:11B1 *
+01:11D0 00              	   325: spry:           .blk MAXSPR,0
+01:11D1 *
+01:11F0 00              	   326: sprc:           .blk MAXSPR,0
+01:11F1 *
+01:1210 00              	   327: sprf:           .blk MAXSPR,0
+01:1211 *
+                        	   328: 
+01:1230 00              	   329: sortsprx:       .blk MAXSPR,0                   ;Sorted sprite table
+01:1231 *
+01:1250 00              	   330: sortspry:       .blk MAXSPR+1,0                 ;Must be one byte extra for the
+01:1251 *
+                        	   331:                                                 ;$ff endmark
+01:1271 00              	   332: sortsprc:       .blk MAXSPR,0
+01:1272 *
+01:1291 00              	   333: sortsprf:       .blk MAXSPR,0
+01:1292 *
+                        	   334: 
+01:12B1 00              	   335: spenatbl        .byte %00000000                  ;Table of sprites that are "on"
+01:12B2 01              	   336:                 .byte %00000001                  ;for $d015
+01:12B3 03              	   337:                 .byte %00000011
+01:12B4 07              	   338:                 .byte %00000111
+01:12B5 0F              	   339:                 .byte %00001111
+01:12B6 1F              	   340:                 .byte %00011111
+01:12B7 3F              	   341:                 .byte %00111111
+01:12B8 7F              	   342:                 .byte %01111111
+01:12B9 FF              	   343:                 .byte %11111111
+                        	   344: 
+01:12BA 00              	   345: physicalsprtbl1:.byte 0,1,2,3,4,5,6,7            ;Indexes to frame & color
+01:12BB 01
+01:12BC 02
+01:12BD 03
+01:12BE 04
+01:12BF 05
+01:12C0 06
+01:12C1 07
+01:12C2 00              	   346:                 .byte 0,1,2,3,4,5,6,7            ;registers
+01:12C3 01
+01:12C4 02
+01:12C5 03
+01:12C6 04
+01:12C7 05
+01:12C8 06
+01:12C9 07
+01:12CA 00              	   347:                 .byte 0,1,2,3,4,5,6,7
+01:12CB 01
+01:12CC 02
+01:12CD 03
+01:12CE 04
+01:12CF 05
+01:12D0 06
+01:12D1 07
+01:12D2 00              	   348:                 .byte 0,1,2,3,4,5,6,7
+01:12D3 01
+01:12D4 02
+01:12D5 03
+01:12D6 04
+01:12D7 05
+01:12D8 06
+01:12D9 07
+01:12DA 00              	   349:                 .byte 0,1,2,3,4,5,6,7
+01:12DB 01
+01:12DC 02
+01:12DD 03
+01:12DE 04
+01:12DF 05
+01:12E0 06
+01:12E1 07
+01:12E2 00              	   350:                 .byte 0,1,2,3,4,5,6,7
+01:12E3 01
+01:12E4 02
+01:12E5 03
+01:12E6 04
+01:12E7 05
+01:12E8 06
+01:12E9 07
+01:12EA 00              	   351:                 .byte 0,1,2,3,4,5,6,7
+01:12EB 01
+01:12EC 02
+01:12ED 03
+01:12EE 04
+01:12EF 05
+01:12F0 06
+01:12F1 07
+01:12F2 00              	   352:                 .byte 0,1,2,3,4,5,6,7
+01:12F3 01
+01:12F4 02
+01:12F5 03
+01:12F6 04
+01:12F7 05
+01:12F8 06
+01:12F9 07
+                        	   353: 
+01:12FA 00              	   354: physicalsprtbl2:.byte 0,2,4,6,8,10,12,14
+01:12FB 02
+01:12FC 04
+01:12FD 06
+01:12FE 08
+01:12FF 0A
+01:1300 0C
+01:1301 0E
+01:1302 00              	   355:                 .byte 0,2,4,6,8,10,12,14
+01:1303 02
+01:1304 04
+01:1305 06
+01:1306 08
+01:1307 0A
+01:1308 0C
+01:1309 0E
+01:130A 00              	   356:                 .byte 0,2,4,6,8,10,12,14
+01:130B 02
+01:130C 04
+01:130D 06
+01:130E 08
+01:130F 0A
+01:1310 0C
+01:1311 0E
+01:1312 00              	   357:                 .byte 0,2,4,6,8,10,12,14
+01:1313 02
+01:1314 04
+01:1315 06
+01:1316 08
+01:1317 0A
+01:1318 0C
+01:1319 0E
+01:131A 00              	   358:                 .byte 0,2,4,6,8,10,12,14
+01:131B 02
+01:131C 04
+01:131D 06
+01:131E 08
+01:131F 0A
+01:1320 0C
+01:1321 0E
+01:1322 00              	   359:                 .byte 0,2,4,6,8,10,12,14
+01:1323 02
+01:1324 04
+01:1325 06
+01:1326 08
+01:1327 0A
+01:1328 0C
+01:1329 0E
+01:132A 00              	   360:                 .byte 0,2,4,6,8,10,12,14
+01:132B 02
+01:132C 04
+01:132D 06
+01:132E 08
+01:132F 0A
+01:1330 0C
+01:1331 0E
+01:1332 00              	   361:                 .byte 0,2,4,6,8,10,12,14
+01:1333 02
+01:1334 04
+01:1335 06
+01:1336 08
+01:1337 0A
+01:1338 0C
+01:1339 0E
+                        	   362: 
+01:133A FE              	   363: andtbl:         .byte 255-1
+01:133B 01              	   364: ortbl:          .byte 1
+01:133C FD              	   365:                 .byte 255-2
+01:133D 02              	   366:                 .byte 2
+01:133E FB              	   367:                 .byte 255-4
+01:133F 04              	   368:                 .byte 4
+01:1340 F7              	   369:                 .byte 255-8
+01:1341 08              	   370:                 .byte 8
+01:1342 EF              	   371:                 .byte 255-16
+01:1343 10              	   372:                 .byte 16
+01:1344 DF              	   373:                 .byte 255-32
+01:1345 20              	   374:                 .byte 32
+01:1346 BF              	   375:                 .byte 255-64
+01:1347 40              	   376:                 .byte 64
+01:1348 7F              	   377:                 .byte 255-128
+01:1349 80              	   378:                 .byte 128
+                        	   379: 
+                        	   380: 
+
+
+Symbols by name:
+andtbl                           A:133A
+ci1icr                           E:DC0D
+cia1                             E:DC00
+cinv                             E:0314
+colorok                          A:1023
+initloop                         A:100B
+initraster                       A:104F
+initsprites                      A:1073
+irq1                             A:1082
+irq1_beginsort                   A:10D1
+irq1_cleardone                   A:10E2
+irq1_clearloop                   A:10DA
+irq1_nonewsprites                A:10AD
+irq1_nospritesatall              A:10CE
+irq1_notmorethan8                A:10B5
+irq1_sortloop                    A:10E4
+irq1_sortloop3                   A:111A
+irq1_sortreload                  A:110A
+irq1_sortskip                    A:110C
+irq1_sortswap                    A:10F3
+IRQ1LINE                         E:00FC
+irq2                             A:113C
+irq2_direct                      A:113F
+irq2_endspr                      A:118A
+irq2_lastspr                     A:119E
+irq2_lowmsb                      A:116F
+irq2_msbok                       A:1178
+irq2_notover                     A:114B
+irq2_spriteloop                  A:114D
+irqmsk                           E:D01A
+is_orderlist                     A:107B
+mainloop                         A:1029
+MAXSPR                           E:0020
+moveloop                         A:1031
+msigx                            E:D010
+numsprites                       E:0002
+ortbl                            A:133B
+physicalsprtbl1                  A:12BA
+physicalsprtbl2                  A:12FA
+raster                           E:D012
+scroly                           E:D011
+sortedsprites                    E:0004
+sortorder                        E:0010
+sortsprc                         A:1271
+sortsprf                         A:1291
+sortsprx                         A:1230
+sortspry                         A:1250
+sp0col                           E:D027
+sp0ptr                           E:07F8
+sp0x                             E:D000
+sp0y                             E:D001
+sp1y                             E:D003
+sp2y                             E:D005
+sp3y                             E:D007
+sp4y                             E:D009
+sp5y                             E:D00B
+sp6y                             E:D00D
+sp7y                             E:D00F
+spena                            E:D015
+spenatbl                         A:12B1
+sprc                             A:11F0
+sprf                             A:1210
+sprirqcounter                    E:0006
+sprupdateflag                    E:0003
+sprx                             A:11B0
+spry                             A:11D0
+start                            A:1000
+sysirq                           E:EA81
+tempvariable                     E:0005
+vic                              E:D000
+vicirq                           E:D019
+waitloop                         A:102B
+
+Symbols by value:
+0002 numsprites
+0003 sprupdateflag
+0004 sortedsprites
+0005 tempvariable
+0006 sprirqcounter
+0010 sortorder
+0020 MAXSPR
+00FC IRQ1LINE
+0314 cinv
+07F8 sp0ptr
+1000 start
+100B initloop
+1023 colorok
+1029 mainloop
+102B waitloop
+1031 moveloop
+104F initraster
+1073 initsprites
+107B is_orderlist
+1082 irq1
+10AD irq1_nonewsprites
+10B5 irq1_notmorethan8
+10CE irq1_nospritesatall
+10D1 irq1_beginsort
+10DA irq1_clearloop
+10E2 irq1_cleardone
+10E4 irq1_sortloop
+10F3 irq1_sortswap
+110A irq1_sortreload
+110C irq1_sortskip
+111A irq1_sortloop3
+113C irq2
+113F irq2_direct
+114B irq2_notover
+114D irq2_spriteloop
+116F irq2_lowmsb
+1178 irq2_msbok
+118A irq2_endspr
+119E irq2_lastspr
+11B0 sprx
+11D0 spry
+11F0 sprc
+1210 sprf
+1230 sortsprx
+1250 sortspry
+1271 sortsprc
+1291 sortsprf
+12B1 spenatbl
+12BA physicalsprtbl1
+12FA physicalsprtbl2
+133A andtbl
+133B ortbl
+D000 sp0x
+D000 vic
+D001 sp0y
+D003 sp1y
+D005 sp2y
+D007 sp3y
+D009 sp4y
+D00B sp5y
+D00D sp6y
+D00F sp7y
+D010 msigx
+D011 scroly
+D012 raster
+D015 spena
+D019 vicirq
+D01A irqmsk
+D027 sp0col
+DC00 cia1
+DC0D ci1icr
+EA81 sysirq

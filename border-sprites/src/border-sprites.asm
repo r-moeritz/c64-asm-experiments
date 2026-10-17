@@ -30,6 +30,7 @@ raster: .equ vic + $12
 spena:  .equ vic + $15
 vicirq: .equ vic + $19
 irqmsk: .equ vic + $1a
+xxpand: .equ vic + $1d
 sp0col: .equ vic + $27
 ci1icr: .equ $dc0d
 sysirq: .equ $ea7e
@@ -66,19 +67,22 @@ setupspr:
         ;; enable all 8 sprites
         lda #$ff
         sta spena
+        ;; set sprites 1,2 & 5,6 to double width
+        lda #$66
+        sta xxpand
         ;; set sprite colours
-        lda #0
-        sta sp0col
-        sta sp0col + 1
-        sta sp0col + 2
-        sta sp0col + 3
-        lda #1
-        sta sp0col + 4
-        sta sp0col + 5
-        sta sp0col + 6
-        sta sp0col + 7
+        ldy #7
+        tya
+        ldx #0
+:       cpx #8
+        beq :+
+        tya
+        sta sp0col,x
+        iny
+        inx        
+        jmp :-
         ;; set sprite pointers
-        lda #sp0def/64
+:       lda #sp0def/64
         sta sp0ptr
         sta sp0ptr + 1
         sta sp0ptr + 2
@@ -92,16 +96,16 @@ setupspr:
         clc
         lda #24
         sta sp0x
-        sta sp4x                ;sprites 0 & 4 at x=24
-        adc #50
+        sta sp4x
+        adc #24
         sta sp1x
-        sta sp5x                ;sprites 1 & 5 at x=74
-        adc #50
+        sta sp5x
+        adc #48
         sta sp2x
-        sta sp6x                ;sprites 2 & 6 at x=124
-        adc #50
+        sta sp6x
+        adc #48
         sta sp3x
-        sta sp7x                ;sprites 3 & 7 at x=174
+        sta sp7x
         ;; set sprite y coordinates
         lda #31
         sta sp0y
@@ -156,8 +160,8 @@ finirq: asl vicirq              ;ACK raster IRQ
 
         ;; Sprite shape definitions
         .align 5
-sp0def: .blk 57,$ff
-        .blk 6,$00
+sp0def: .blk 24,$ff
+        .blk 39,$00
         .align 5
 sp1def: .blk 45,$ff
         .blk 18,$00
