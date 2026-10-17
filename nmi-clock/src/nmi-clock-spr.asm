@@ -4,9 +4,17 @@
         ;; CIA2 timers A+B cascaded -> 1 NMI/second (PAL)
         ;; HH:MM:SS clock (BCD sec/min/hour) displayed with
         ;; 8 sprites in the bottom-right corner of the screen.
-        ;; The 8x8 glyphs are copied from the C64 character
-        ;; ROM into the top-left corner of 64-byte sprite
-        ;; blocks (11 glyphs: digits 0-9 and ':').
+        ;; The 8x8 glyphs are copied from the chargen ROM
+        ;; ('0'-'9' and ':') into the left column of 11
+        ;; 64-byte sprite blocks at $c800.
+        ;; -----------------------------------------------
+        ;; The VIC-II is switched to bank $c000-$ffff, so it
+        ;; sees RAM there: screen at $c400, sprites at $c800,
+        ;; sprite pointers at $c7f8-$c7ff.  Before the switch the
+        ;; whole chargen charset is copied into the RAM at $d000
+        ;; (the CPU reads the chargen ROM at $d000 while writes
+        ;; hit the RAM underneath, which the VIC-II then displays
+        ;; from bank offset $1000).
         ;; -----------------------------------------------
         ;; Timer A = 20455 (~50.008 Hz on PAL 1.022727 MHz
         ;; CIA clock); timer B counts 50 underflows -> ~1s
@@ -30,6 +38,8 @@ jcs:    .macro adr
 
         ;; CIA2 registers
         ;; --------------
+ci2pra: .equ $dd00              ;.byte data port register A
+c2ddra: .equ $dd02              ;.byte data direction register A
 ci2tia: .equ $dd04              ;.word Timer A
 ci2tib: .equ $dd06              ;.word Timer B
 ci2icr: .equ $dd0d              ;.byte Interrupt ctrl register
@@ -41,17 +51,20 @@ ci2crb: .equ $dd0f              ;.byte Timer B ctrl register
 sprxlo: .equ $d000              ;.byte sprite X positions (low)
 sprylo: .equ $d001              ;.byte sprite Y positions
 sprxhi: .equ $d010              ;.byte sprite X positions (high)
-sprenab:.equ $d015              ;.byte sprite enable
-spcolor:.equ $d027              ;.byte sprite colors (0-7)
+spena:  .equ $d015              ;.byte sprite enable
+vmcsb:  .equ $d018              ;.byte memory ctrl register
+sp0col: .equ $d027              ;.byte sprite colors (0-7)
 
         ;; System Memory Locations
         ;; -----------------------
 nmivec: .equ $0318              ;kernal indirect NMI vector
-sprptr: .equ $07f8              ;sprite data pointers (top of screen RAM)
-glyphs: .equ $3000              ;sprite glyph buffer (must be < $4000)
+hibase: .equ $0288              ;high byte of KERNAL screen base
+sprptr: .equ $c7f8              ;sprite pointers (end of screen RAM $c400+$3f8)
+glyphs: .equ $c800              ;sprite glyph buffer (11 x 64 bytes)
+sprbase:.equ $20                ;glyphs offset $0800 / 64 in VIC bank 3
 
-        ;; Sprite anchor = top-left pixel of the first clock cell at
-        ;; screen RAM $07e0 (text row 24, column 32).
+        ;; Sprite anchor = top-left pixel of the first clock cell
+        ;; (text row 24, column 32; screen RAM block at $c400).
         ;;
         ;; VIC-II sprite coordinates are measured from the top-left of
         ;; the border, NOT the visible screen.  The visible text area
@@ -69,20 +82,17 @@ frmnum: .equ $ad8a              ;eval numeric expression
 comma:  .equ $aefd              ;detect comma in BASIC line
 facwrd: .equ $b7f7              ;convert FAC #1 to word at linnum
 illqua: .equ $b248              ;raise illegal qty error
+setpnt: .equ $e56c              ;refresh KERNAL screen/color pointers
 
         ;; OS memory
         ;; ---------
 linnum: .ezp $14                ;.word BASIC line number
 
-        ;; Working memory (ZP)
-        ;; -------------------
-hours:    .ezp $f7                ;.byte Time in hours BCD
-minutes:  .ezp $f8                ;.byte Time in minutes BCD
-seconds:  .ezp $f9                ;.byte Time in seconds BCD
+        ;; Temporary working memory (ZP)
+        ;; -----------------------------
 temp:     .ezp $fa                ;.byte Scratch pad
 ptr1:     .ezp $5b                ;.word Scratch pointer
 ptr2:     .ezp $5d                ;.word Scratch pointer
-sprbase:  .ezp $5f                ;.byte Sprite pointer base (glyphs>>6)
 
         .org $c000
 
@@ -142,7 +152,7 @@ getwrd$:
         ;; Called from BASIC via jump table entry:
         ;;      SYS49155
 start:
-        jsr initgfx      ;; build sprite glyphs, position/enable sprites
+        jsr initspr      ;; build sprite glyphs, position/enable sprites
 
         lda #$e7         ;; timer A = 20,455 (PAL)
         sta ci2tia
@@ -193,16 +203,16 @@ restart:
 bin2bcd:
         ldx #0
         tay
-loop$:
+tens$:
         cpy #10
-        bcc endloop$
+        bcc ones$
         tya
         sec
         sbc #10
         tay
         inx
-        jmp loop$
-endloop$:
+        jmp tens$
+ones$:
         txa
         asl
         asl
@@ -225,7 +235,7 @@ isr:
         ldy ci2icr       ;; read clears pending flag
         tya
         and #$02
-        beq endisr$
+        beq exit$
 
         sed               ;; BCD +1 second, with 60/60/24 rollover
         clc
@@ -258,7 +268,7 @@ isr:
 done$:
         cld
         jsr print
-endisr$:
+exit$:
         pla
         tay
         pla
@@ -266,40 +276,65 @@ endisr$:
         pla
         rti
 
-        ;; Routine to copy characters '0'-'9' and ':' from
-        ;; the character ROM into the top-left 8x8 corner
-        ;; of 11 sprite blocks at 'glyphs', then position
-        ;; and enable the 8 clock sprites.
-initgfx:
+        ;; Routine to build the '0'-'9' and ':' sprite shapes
+        ;; from the chargen ROM, then position, color and
+        ;; point the 8 clock sprites at them.
+initspr:
         sei
-        lda $01
-        pha
-        and #%11111011   ;; CHAREN low -> chargen visible at $d000
-        sta $01
+        cld
 
-        ;; Build 11 glyph blocks (digits 0-9, then ':')
-        ldx #0           ;; glyph index
-ig_loop$:
-        ;; dest = glyphs + X*64
+        ;; Preserve the visible screen before moving it from $0400
+        ;; to $c400 in the new VIC bank.
+        lda #$00
+        sta ptr1
+        sta ptr2
+        lda #$04
+        sta ptr1+1
+        lda #$c4
+        sta ptr2+1
+        ldx #4
+scr$:
+        ldy #0
+scrbyte$:
+        lda (ptr1),y
+        sta (ptr2),y
+        iny
+        bne scrbyte$
+        inc ptr1+1
+        inc ptr2+1
+        dex
+        bne scr$
+
+        ;; Copy all 2 KiB of the chargen ROM into the RAM beneath it.
+        ;; Reads see ROM and writes to the same address reach RAM.
+        lda $01
+        pha                     ;save current CPU config
+        lda #$33
+        sta $01                 ;LORAM=1, HIRAM=1 CHAREN=0
+        lda #$00
+        sta ptr1
+        lda #$d0
+        sta ptr1+1
+        ldx #8
+chrpage$:
+        ldy #0
+chrbyte$:
+        lda (ptr1),y
+        sta (ptr1),y
+        iny
+        bne chrbyte$
+        inc ptr1+1
+        dex
+        bne chrpage$
+
+        ;; 11 glyphs: src = $d180 + g*8 ('0' = ASCII $30),
+        ;;            dst = $c800 + g*64.
         lda #<glyphs
         sta ptr1
         lda #>glyphs
         sta ptr1+1
-        txa
-        beq ig_hav$
-        stx temp
-ig_add$:
-        clc
-        lda ptr1
-        adc #64
-        sta ptr1
-        lda ptr1+1
-        adc #0
-        sta ptr1+1
-        dec temp
-        bne ig_add$
-ig_hav$:
-        ;; src = $d180 + X*8 ('0' is the first glyph)
+        ldx #0
+gly$:
         txa
         asl
         asl
@@ -308,51 +343,73 @@ ig_hav$:
         adc #$80
         sta ptr2
         lda #$d1
-        adc #0
-        sta ptr2+1
-        ;; zero the whole 64-byte sprite block first
-        ldy #0
-ig_zero$:
-        lda #0
+        sta ptr2+1           ;; src = $d100 + $80 + g*8
+        lda #0               ;; clear the 64-byte sprite block
+        ldy #63
+zro$:
         sta (ptr1),y
-        iny
-        cpy #64
-        bne ig_zero$
-        ;; Copy the 8 glyph rows into the left 8 columns of the
-        ;; sprite.  A sprite row is 3 bytes wide (24 px), so glyph
-        ;; row N must go to byte offset N*3 (not N): the glyph
-        ;; occupies bytes 0,3,6,...,21 of the sprite block.
-        ldy #0
-ig_inner$:
-        lda (ptr2),y     ;; glyph row Y (0..7)
+        dey
+        bpl zro$
+        ldy #0               ;; glyph row n -> sprite byte n*3
+row$:
+        lda (ptr2),y
         pha
         tya
-        sta temp         ;; temp = Y (glyph row)
-        asl              ;; Y*2
-        clc
-        adc temp         ;; Y*3 -> byte offset of sprite row Y
+        sta temp
+        asl
+        adc temp             ;; 3*n
         tay
         pla
-        sta (ptr1),y     ;; store glyph row in left column
-        ldy temp         ;; restore glyph row counter
+        sta (ptr1),y
+        ldy temp
         iny
         cpy #8
-        bne ig_inner$
+        bne row$
+        clc                  ;; advance to the next sprite block
+        lda ptr1
+        adc #64
+        sta ptr1
+        bcc nxt$
+        inc ptr1+1
+nxt$:
         inx
         cpx #11
-        bne ig_loop$
+        bne gly$
 
-        ;; restore memory config
+        ;; Restore I/O visibility before touching CIA2 or VIC-II.
         pla
         sta $01
-        cli
 
-        ;; sprite X positions (low registers at $d000,$d002,...):
+        ;; VIC bank $c000-$ffff: CIA2 PRA bits 0-1 = %00.
+        lda #3                  ;configure the DDR so bits 0-1
+        ora c2ddra              ;are output bits
+        sta c2ddra
+        lda ci2pra
+        and #$fc                ;select VIC bank 3 ($c000-$ffff)
+        sta ci2pra
+
+        ;; Screen = $0400, charset = $1000 (bank offsets):
+        ;; physical $c400 screen (pointers at $c7f8-$c7ff) and
+        ;; the charset copied to RAM at $d000.
+        lda #$0f
+        and vmcsb
+        ora #$10
+        sta vmcsb
+        lda #$f1
+        and vmcsb
+        ora #$04
+        sta vmcsb
+
+        ;; Tell the KERNAL screen editor about the relocated screen,
+        ;; then refresh its pointers for the current cursor position.
+        lda #$c4
+        sta hibase
+        jsr setpnt
+
+        ;; sprite X positions (low bytes; hi bits set below):
         ;; cols 32-39 => X = sprx0 + i*8, i.e. 280,288,...,336.
-        ;; The low byte written here (24..80) is sprx0&$ff + i*8;
-        ;; the high bit is provided by sprxhi=$ff below.
         ldx #0
-ig_xl$:
+xlo$:
         txa
         asl
         asl
@@ -362,54 +419,29 @@ ig_xl$:
         inx
         inx
         cpx #16
-        bne ig_xl$
-        ;; sprite Y positions: all on the last text row 24
-        ;; (sprite Y = 50 + 24*8 = 242)
+        bne xlo$
+        ;; sprite Y positions: all on text row 24 (Y = 50+24*8 = 242)
         lda #spry0
-        sta sprylo
-        sta sprylo+2
-        sta sprylo+4
-        sta sprylo+6
-        sta sprylo+8
-        sta sprylo+10
-        sta sprylo+12
-        sta sprylo+14
-        ;; colors = white
+        ldx #14
+ylo$:
+        sta sprylo,x
+        dex
+        dex
+        bpl ylo$
+        ;; colors: all white
         lda #$01
-        sta spcolor
-        sta spcolor+1
-        sta spcolor+2
-        sta spcolor+3
-        sta spcolor+4
-        sta spcolor+5
-        sta spcolor+6
-        sta spcolor+7
-        ;; enable all sprites, all X hi bits
+        ldx #7
+col$:
+        sta sp0col,x
+        dex
+        bpl col$
+        ;; enable sprites, set all X high bits (cols 32-39)
         lda #$ff
         sta sprxhi
-        sta sprenab
-        ;; sprite pointer base = glyphs>>6
-        lda #<glyphs
-        lsr
-        lsr
-        lsr
-        lsr
-        lsr
-        lsr
-        sta temp
-        lda #>glyphs
-        asl
-        asl
-        ora temp
-        sta sprbase
-        ;; initial display: 00:00:00
-        ldx #0
-        lda sprbase
-ig_ptr$:
-        sta sprptr,x
-        inx
-        cpx #8
-        bne ig_ptr$
+        sta spena
+        ;; draw the current time immediately
+        jsr print
+        cli
         rts
 
         ;; Routine to update the 8 clock sprites
@@ -425,13 +457,12 @@ print:
         lda #10          ;; ':'
         jsr putdgt$
         lda seconds
-        jsr digits$
-        rts
+        jmp digits$
 
         ;; Write sprite pointer for glyph index in .A
 putdgt$:
         clc
-        adc sprbase
+        adc #sprbase
         sta sprptr,x
         inx
         rts
@@ -447,3 +478,9 @@ digits$:
         pla
         and #$0f
         jmp putdgt$       ;; ones digit
+
+        ;; Persistent state must not use zero page: BASIC and the
+        ;; KERNAL use almost all of it as volatile working storage.
+hours:   .byte 0          ;; Time in hours BCD
+minutes: .byte 0          ;; Time in minutes BCD
+seconds: .byte 0          ;; Time in seconds BCD
