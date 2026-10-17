@@ -1,6 +1,7 @@
         ;; GEOram output module for Profi-Ass v2
         ;; -------------------------------------
-        ;; A plugin for Profi-Ass v2 to write object code to GEOram.
+        ;; A plugin for Profi-Ass v2 to write object code to GEOram
+        ;; and copy to C64 memory.
         ;; 
         ;; Format:
         ;; +-------------+---------------+-------------+
@@ -10,8 +11,12 @@
         ;;
         ;; First initialize:
         ;;   SYS49152
+        ;; 
         ;; Then assemble to GEOram:
         ;;   .OPT P,O=$C020
+        ;; 
+        ;; Later, you may want to copy the object code to C64 memory:
+        ;;   SYS49328
 
         ;; Constants
 FIRST_BLOCK:    .equ 0          ;GEOram block at which to start writing data
@@ -37,10 +42,11 @@ pa_adr:         .ezp $56        ;WORD object code starting address
 pa_buf:         .equ $015b      ;buffer for remaining bytes beyond first 3
 
         ;; Working memory
-datalen:        .ezp $a3        ;WORD total bytes written
+datalen:        .ezp $a3        ;WORD total bytes written or left to copy
 curblock:       .ezp $a5        ;BYTE current GEOram block (0-31)
 curpage:        .ezp $a6        ;BYTE current GEOram page (0-63)
 offset:         .ezp $a7        ;BYTE offset within page ($00-$ff)
+c64addr:        .ezp $a7        ;WORD address to copy to in C64 main memory
 
         ;; Initialize GEOram registers & working memory.
         ;; Must be called before each assembly!
@@ -62,7 +68,7 @@ init:   lda #FIRST_BLOCK
         .align 4
 write:  lda pa_len
         cmp #PA_STOP
-        beq finish
+        beq finwrt
         cmp #PA_START
         beq start
         ldy #0
@@ -109,7 +115,7 @@ start:  ldx offset
         stx offset
 return: rts
         ;; Write data length to first word in first block of GEOram
-finish: lda #FIRST_BLOCK
+finwrt: lda #FIRST_BLOCK
         sta geoblock
         sta curblock
         lda #0
@@ -121,7 +127,7 @@ finish: lda #FIRST_BLOCK
         inx
         lda datalen,x
         sta georam,x
-        jsr printsummary
+        jsr print_write_summary
         rts
 enomem: jsr newline
         lda #<outofmem
@@ -129,6 +135,52 @@ enomem: jsr newline
         jsr strout
         rts
 
+        ;; Copy object code from GEOram to C64.
+        .align 4
+read:   lda #FIRST_BLOCK
+        sta geoblock
+        sta curblock
+        lda #0
+        sta geopage
+        sta curpage
+        sta datalen
+        sta datalen+1
+        sta offset
+        jsr readheader
+        inx
+        ;; Copy loop
+        ldy #0
+rloop:  lda georam,x
+        sta (c64addr),y
+        jsr decdatalen
+        lda datalen
+        beq fincpy
+        iny
+        bvs incadr
+chkpg:  inx
+        bvs nxpag
+        jmp rloop
+incadr: jsr inc64addr
+        jmp chkpg
+nxpag:  inc curpage
+        lda curpage
+        cmp #MAX_PAGE
+        beq nxblk           ;past page 63? next block!
+        sta geopage
+        jmp rloop
+nxblk:  lda #0
+        sta curpage
+        sta geopage
+        inc curblock
+        lda curblock
+        cmp #MAX_BLOCK
+        beq enomem
+        sta geoblock
+        jmp rloop
+fincpy: jsr readheader
+        jsr print_copy_summary
+        rts
+        
         ;; Routine to increment data length
 incdatalen:
         clc
@@ -140,22 +192,75 @@ incdatalen:
         sta datalen+1
         rts
 
-        ;; Routine to print summary of data written
-printsummary:
+        ;; Routine to print write_summary of data written
+print_write_summary:
         jsr newline
         ldx datalen
         lda datalen+1
         jsr linprt
-        lda #<summary
-        ldy #>summary
+        lda #<write_summary
+        ldy #>write_summary
         jsr strout
-        ldx #0
-        lda #FIRST_BLOCK
+        rts
+
+print_copy_summary:
+        jsr newline
+        ldx datalen
+        lda datalen+1
+        jsr linprt
+        lda #<copy_summary
+        ldy #>copy_summary
+        jsr strout
+        ldx c64addr
+        lda c64addr+1
         jsr linprt
         rts
 
-summary:
-        .string " BYTES WRITTEN TO GEORAM FROM BLOCK "        
+        ;; Routine to decrement data length
+decdatalen:
+        sec
+        lda datalen
+        sbc #1
+        sta datalen
+        lda datalen+1
+        sbc #0
+        sta datalen+1
+        rts
+
+        ;; Routine to increment C64 address
+inc64addr:
+        clc
+        lda c64addr
+        adc #1
+        sta c64addr
+        lda c64addr+1
+        adc #0
+        sta c64addr+1
+        rts
+
+        ;; Routine to read data length & C64 address from GEOram
+readheader:
+        ldx #0
+        ;; Read data length
+        lda georam,x
+        sta datalen
+        inx
+        lda georam,x
+        sta datalen+1
+        inx
+        ;; Read C64 address
+        lda georam,x
+        sta c64addr
+        inx
+        lda georam,x
+        sta c64addr+1
+        rts
+        
+write_summary:
+        .string " BYTES WRITTEN TO GEORAM"
+
+copy_summary:
+        .string " BYTES COPIED FROM GEORAM TO "
 
 outofmem:
         .string "ERROR: GEORAM OUT OF MEMORY"
