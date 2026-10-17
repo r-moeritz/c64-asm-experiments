@@ -1,5 +1,5 @@
 Sections:
-00: "org0001:801" (801-A3F)
+00: "org0001:801" (801-97F)
 
 
 Source: "src/border-sprites.asm"
@@ -90,7 +90,7 @@ Source: "src/border-sprites.asm"
 00:0848 8DF907          	    83:         sta sp0ptr + 1
 00:084B 8DFA07          	    84:         sta sp0ptr + 2
 00:084E 8DFB07          	    85:         sta sp0ptr + 3          ;first 4 sprites use shape 0
-00:0851 A928            	    86:         lda #sp1def/64
+00:0851 A925            	    86:         lda #sp1def/64
 00:0853 8DFC07          	    87:         sta sp0ptr + 4
 00:0856 8DFD07          	    88:         sta sp0ptr + 5
 00:0859 8DFE07          	    89:         sta sp0ptr + 6
@@ -162,16 +162,16 @@ Source: "src/border-sprites.asm"
 00:08E5 4C7EEA          	   155:         jmp sysirq
                         	   156: 
                         	   157:         ;; Sprite shape definitions
-                        	   158:         .align 8
+                        	   158:         .align 5
 00:0900 FF              	   159: sp0def: .blk 57,$ff
 00:0901 *
 00:0939 00              	   160:         .blk 6,$00
 00:093A *
-                        	   161:         .align 8
-00:0A00 FF              	   162: sp1def: .blk 45,$ff
-00:0A01 *
-00:0A2D 00              	   163:         .blk 18,$00
-00:0A2E *
+                        	   161:         .align 5
+00:0940 FF              	   162: sp1def: .blk 45,$ff
+00:0941 *
+00:096D 00              	   163:         .blk 18,$00
+00:096E *
                         	   164: 
 
 
@@ -195,7 +195,7 @@ sp0def                           A:0900
 sp0ptr                           E:07F8
 sp0x                             E:D000
 sp0y                             E:D001
-sp1def                           A:0A00
+sp1def                           A:0940
 sp1x                             E:D002
 sp1y                             E:D003
 sp2x                             E:D004
@@ -228,7 +228,7 @@ Symbols by value:
 08D5 setbit
 08E2 finirq
 0900 sp0def
-0A00 sp1def
+0940 sp1def
 D000 sp0x
 D000 vic
 D001 sp0y

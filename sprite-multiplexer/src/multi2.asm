@@ -373,7 +373,7 @@ irq1_hassprites:
                 lda #<irq2
                 sta cinv
                 lda #>irq2
-                sta $0315
+                sta cinv+1
 irq1_sortsprstart:
                 ldx #$00                    ;Go through the first sprite IRQ immediately
                 .if SHOW_RASTIME>0
@@ -527,7 +527,7 @@ irq2_alldone:   lda #<irq1
                 lda #IRQ1LINE
                 sta raster
                 inc vicirq
-                jmp sysirq                  ;All spriteIRQ's done, return to the top of screen IRQ
+                jmp sysirq                  ;All sprite IRQ's done, return to the top of screen IRQ
 
         ;; Tables
 

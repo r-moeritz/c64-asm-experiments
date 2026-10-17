@@ -155,9 +155,9 @@ finirq: asl vicirq              ;ACK raster IRQ
         jmp sysirq
 
         ;; Sprite shape definitions
-        .align 8
+        .align 5
 sp0def: .blk 57,$ff
         .blk 6,$00
-        .align 8
+        .align 5
 sp1def: .blk 45,$ff
         .blk 18,$00

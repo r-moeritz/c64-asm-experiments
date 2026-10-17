@@ -11,6 +11,8 @@ m:      .ezp $fb     ; zero page variable
 
         ;; VIC-II registers
 vic:    .equ $d000
+sp0x:   .equ vic
+sp0y:   .equ vic + $01
 scroly: .equ vic + $11
 raster: .equ vic + $12
 spena:  .equ vic + $15
@@ -70,18 +72,18 @@ skipinit:
     tay
     lda #0
     sta m
-:
+siloop: 
     lda m
-    sta $d000,x         ;set the sprite X
+    sta sp0x,x         ;set the sprite X
     adc #24
     sta m
     tya
-    sta $d001,x         ;and Y coordinates
+    sta sp0y,x         ;and Y coordinates
     lda #sp0def/64
     sta sp0ptr,x        ;and sprite pointers
     dex
     dex
-    bpl :-
+    bpl siloop
     lda #$7f
     sta ci1icr          ;disable timer interrupts
     sta ci2icr
