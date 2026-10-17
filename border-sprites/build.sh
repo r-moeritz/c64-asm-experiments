@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-name=border-sprites
+NAME=border-sprites
 
-vasm6502_oldstyle "./$name.asm" -cbm-prg -Fbin -chklabels -nocase \
-                  -o "./$name.prg" -L "./$name.txt"
+vasm6502_oldstyle -cbm-prg -Fbin -chklabels -nocase -dotdir \
+                  src/$NAME.asm -o build/$NAME.prg -L build/$NAME.lst
