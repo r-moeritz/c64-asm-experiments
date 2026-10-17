@@ -1,0 +1,344 @@
+Sections:
+00: "org0001:c000" (C000-C13A)
+
+
+Source: "src/nmi-clock-chr.asm"
+                        	     1:         ;; NMI-based clock/timer
+                        	     2:         ;; =====================
+                        	     3:         ;;
+                        	     4:         ;; CIA2 timers A+B cascaded -> 1 NMI/second (PAL)
+                        	     5:         ;; HH:MM:SS clock (BCD sec/min/hour), printed in
+                        	     6:         ;; the bottom-right corner of the screen.
+                        	     7:         ;; -----------------------------------------------
+                        	     8:         ;; Timer A = 20455 (~50.008 Hz on PAL 1.022727 MHz
+                        	     9:         ;; CIA clock); timer B counts 50 underflows -> ~1s
+                        	    10: 
+                        	    11:         ;; Macros
+                        	    12:         ;; ------
+                        	    13: 
+                        	    14:         ;; BNE to distant address
+                        	    15: jne:    .macro adr
+                        	    16:         beq :+
+                        	    17:         jmp \adr
+                        	    18: :
+                        	    19:         .endm
+                        	    20: 
+                        	    21:         ;; BCS to distant address
+                        	    22: jcs:    .macro adr
+                        	    23:         bcc :+
+                        	    24:         jmp \adr
+                        	    25: :
+                        	    26:         .endm
+                        	    27: 
+                        	    28:         ;; CIA2 registers
+                        	    29:         ;; --------------
+                        	    30: ci2tia: .equ $dd04              ;.word Timer A
+                        	    31: ci2tib: .equ $dd06              ;.word Timer B
+                        	    32: ci2icr: .equ $dd0d              ;.byte Interrupt ctrl register
+                        	    33: ci2cra: .equ $dd0e              ;.byte Timer A ctrl register
+                        	    34: ci2crb: .equ $dd0f              ;.byte Timer B ctrl register
+                        	    35: 
+                        	    36:         ;; System Memory Locations
+                        	    37:         ;; -----------------------
+                        	    38: nmivec: .equ $0318              ;kernal indirect NMI vector
+                        	    39: screen: .equ $07e0              ;screen memory location
+                        	    40: 
+                        	    41:         ;; OS routines
+                        	    42:         ;; -----------
+                        	    43: frmnum: .equ $ad8a              ;eval numeric expression
+                        	    44: comma:  .equ $aefd              ;detect comma in BASIC line
+                        	    45: facwrd: .equ $b7f7              ;convert FAC #1 to word at linnum
+                        	    46: illqua: .equ $b248              ;raise illegal qty error
+                        	    47: 
+                        	    48:         ;; OS memory
+                        	    49:         ;; ---------
+                        	    50: linnum: .ezp $14                ;.word BASIC line number
+                        	    51: 
+                        	    52:         ;; Working memory (ZP)
+                        	    53:         ;; -------------------
+                        	    54: hours:    .ezp $f7                ;.byte Time in hours BCD
+                        	    55: minutes:  .ezp $f8                ;.byte Time in minutes BCD
+                        	    56: seconds:  .ezp $f9                ;.byte Time in seconds BCD
+                        	    57: temp:     .ezp $fa                ;.byte Scratch pad
+                        	    58: 
+                        	    59:         .org $c000
+                        	    60: 
+                        	    61:         ;; Jump table
+                        	    62:         ;; ----------
+00:C000 4C0CC0          	    63: jtable: jmp settime
+00:C003 4C63C0          	    64:         jmp start
+00:C006 4C94C0          	    65:         jmp stop
+00:C009 4C9DC0          	    66:         jmp restart
+                        	    67: 
+                        	    68:         ;; Routines
+                        	    69:         ;; --------
+                        	    70: 
+                        	    71:         ;; Routine to set the time from user input
+                        	    72:         ;; and start the clock.
+                        	    73:         ;; Called from BASIC via jump table entry:
+                        	    74:         ;;      SYS(49152) hrs (0-23), min (0-59), sec (0-59)
+                        	    75:         ;;
+                        	    76:         ;; E.g. SYS(49152) 11,51,20
+                        	    77: settime:
+                        	    78:         ;; Hours
+00:C00C 205DC0          	    79:         jsr getwrd$
+00:C00F A515            	    80:         lda linnum+1
+                        	    81:         jne illqua
+00:C011 F003            	     1M         beq :+
+00:C013 4C48B2          	     2M         jmp illqua
+                        	     3M :
+00:C016 A514            	    82:         lda linnum
+00:C018 C918            	    83:         cmp #24
+                        	    84:         jcs illqua
+00:C01A 9003            	     1M         bcc :+
+00:C01C 4C48B2          	     2M         jmp illqua
+                        	     3M :
+00:C01F 20ABC0          	    85:         jsr bin2bcd
+00:C022 85F7            	    86:         sta hours
+                        	    87:         ;; Minutes
+00:C024 20FDAE          	    88:         jsr comma
+00:C027 205DC0          	    89:         jsr getwrd$
+00:C02A A515            	    90:         lda linnum+1
+                        	    91:         jne illqua
+00:C02C F003            	     1M         beq :+
+00:C02E 4C48B2          	     2M         jmp illqua
+                        	     3M :
+00:C031 A514            	    92:         lda linnum
+00:C033 C93C            	    93:         cmp #60
+                        	    94:         jcs illqua
+00:C035 9003            	     1M         bcc :+
+00:C037 4C48B2          	     2M         jmp illqua
+                        	     3M :
+00:C03A 20ABC0          	    95:         jsr bin2bcd
+00:C03D 85F8            	    96:         sta minutes
+                        	    97:         ;; Seconds
+00:C03F 20FDAE          	    98:         jsr comma
+00:C042 205DC0          	    99:         jsr getwrd$
+00:C045 A515            	   100:         lda linnum+1
+                        	   101:         jne illqua
+00:C047 F003            	     1M         beq :+
+00:C049 4C48B2          	     2M         jmp illqua
+                        	     3M :
+00:C04C A514            	   102:         lda linnum
+00:C04E C93C            	   103:         cmp #60
+                        	   104:         jcs illqua
+00:C050 9003            	     1M         bcc :+
+00:C052 4C48B2          	     2M         jmp illqua
+                        	     3M :
+00:C055 20ABC0          	   105:         jsr bin2bcd
+00:C058 85F9            	   106:         sta seconds
+00:C05A 4C63C0          	   107:         jmp start
+                        	   108: 
+                        	   109: getwrd$:
+00:C05D 208AAD          	   110:         jsr frmnum
+00:C060 4CF7B7          	   111:         jmp facwrd
+                        	   112: 
+                        	   113:         ;; Routine to start the NMI timer
+                        	   114:         ;; Called from BASIC via jump table entry:
+                        	   115:         ;;      SYS49155
+                        	   116: start:
+00:C063 A9E7            	   117:         lda #$e7         ;; timer A = 20,455 (PAL)
+00:C065 8D04DD          	   118:         sta ci2tia
+00:C068 A94F            	   119:         lda #$4f
+00:C06A 8D05DD          	   120:         sta ci2tia+1
+00:C06D A932            	   121:         lda #50          ;; timer B = 50 A-underflows
+00:C06F 8D06DD          	   122:         sta ci2tib
+00:C072 A900            	   123:         lda #0
+00:C074 8D07DD          	   124:         sta ci2tib+1
+                        	   125: 
+00:C077 A911            	   126:         lda #%00010001
+00:C079 8D0EDD          	   127:         sta ci2cra       ;; start timer A
+00:C07C A951            	   128:         lda #%01010001
+00:C07E 8D0FDD          	   129:         sta ci2crb       ;; B counts A underflows, start
+                        	   130: 
+00:C081 AD0DDD          	   131:         lda ci2icr
+00:C084 0982            	   132:         ora #%10000010
+00:C086 8D0DDD          	   133:         sta ci2icr       ;; enable timer B -> NMI
+                        	   134: 
+00:C089 A9C6            	   135:         lda #<isr        ;; hook NMI
+00:C08B 8D1803          	   136:         sta nmivec
+00:C08E A9C0            	   137:         lda #>isr
+00:C090 8D1903          	   138:         sta nmivec+1
+00:C093 60              	   139:         rts
+                        	   140: 
+                        	   141:         ;; Routine to stop the NMI timer
+                        	   142:         ;; Called from BASIC via jump table entry:
+                        	   143:         ;;      SYS49158
+                        	   144: stop:
+00:C094 A97F            	   145:         lda #$7f
+00:C096 8D0DDD          	   146:         sta ci2icr
+00:C099 AD0DDD          	   147:         lda ci2icr
+00:C09C 60              	   148:         rts
+                        	   149: 
+                        	   150:         ;; Routine to stop timer, reset time to 00:00:00
+                        	   151:         ;; and then restart timer.
+                        	   152:         ;; Called from BASIC via jump table entry:
+                        	   153:         ;;      SYS49161
+                        	   154: restart:
+00:C09D 2094C0          	   155:         jsr stop
+00:C0A0 A900            	   156:         lda #0
+00:C0A2 85F7            	   157:         sta hours
+00:C0A4 85F8            	   158:         sta minutes
+00:C0A6 85F9            	   159:         sta seconds
+00:C0A8 4C63C0          	   160:         jmp start
+                        	   161: 
+                        	   162:         ;; Routine to convert byte in .A to packed BCD
+                        	   163: bin2bcd:
+00:C0AB A200            	   164:         ldx #0
+00:C0AD A8              	   165:         tay
+                        	   166: loop$:
+00:C0AE C00A            	   167:         cpy #10
+00:C0B0 9009            	   168:         bcc endloop$
+00:C0B2 98              	   169:         tya
+00:C0B3 38              	   170:         sec
+00:C0B4 E90A            	   171:         sbc #10
+00:C0B6 A8              	   172:         tay
+00:C0B7 E8              	   173:         inx
+00:C0B8 4CAEC0          	   174:         jmp loop$
+                        	   175: endloop$:
+00:C0BB 8A              	   176:         txa
+00:C0BC 0A              	   177:         asl
+00:C0BD 0A              	   178:         asl
+00:C0BE 0A              	   179:         asl
+00:C0BF 0A              	   180:         asl
+00:C0C0 85FA            	   181:         sta temp
+00:C0C2 98              	   182:         tya
+00:C0C3 05FA            	   183:         ora temp
+00:C0C5 60              	   184:         rts
+                        	   185: 
+                        	   186:         ;; NMI service routine: called once per second
+                        	   187: isr:
+                        	   188:         ;; Save x,y,acc
+00:C0C6 48              	   189:         pha
+00:C0C7 8A              	   190:         txa
+00:C0C8 48              	   191:         pha
+00:C0C9 98              	   192:         tya
+00:C0CA 48              	   193:         pha
+                        	   194: 
+00:C0CB AC0DDD          	   195:         ldy ci2icr       ;; read clears pending flag
+00:C0CE 98              	   196:         tya
+00:C0CF 2902            	   197:         and #$02
+00:C0D1 F032            	   198:         beq endisr$
+                        	   199: 
+00:C0D3 F8              	   200:         sed               ;; BCD +1 second, with 60/60/24 rollover
+00:C0D4 18              	   201:         clc
+00:C0D5 A5F9            	   202:         lda seconds
+00:C0D7 6901            	   203:         adc #1
+00:C0D9 85F9            	   204:         sta seconds
+00:C0DB C960            	   205:         cmp #$60
+00:C0DD D022            	   206:         bne done$         ;; seconds < 60: no carry
+                        	   207: 
+00:C0DF A900            	   208:         lda #0            ;; seconds == 60 -> wrap to :00
+00:C0E1 85F9            	   209:         sta seconds
+00:C0E3 18              	   210:         clc
+00:C0E4 A5F8            	   211:         lda minutes
+00:C0E6 6901            	   212:         adc #1
+00:C0E8 85F8            	   213:         sta minutes
+00:C0EA C960            	   214:         cmp #$60
+00:C0EC D013            	   215:         bne done$         ;; minutes < 60: no carry
+                        	   216: 
+00:C0EE A900            	   217:         lda #0            ;; minutes == 60 -> wrap to :00
+00:C0F0 85F8            	   218:         sta minutes
+00:C0F2 18              	   219:         clc
+00:C0F3 A5F7            	   220:         lda hours
+00:C0F5 6901            	   221:         adc #1
+00:C0F7 85F7            	   222:         sta hours
+00:C0F9 C924            	   223:         cmp #$24
+00:C0FB D004            	   224:         bne done$         ;; hours < 24: no wrap
+                        	   225: 
+00:C0FD A900            	   226:         lda #0            ;; hours == 24 -> wrap to 00
+00:C0FF 85F7            	   227:         sta hours
+                        	   228: done$:
+00:C101 D8              	   229:         cld
+00:C102 200BC1          	   230:         jsr print
+                        	   231: endisr$:
+00:C105 68              	   232:         pla
+00:C106 A8              	   233:         tay
+00:C107 68              	   234:         pla
+00:C108 AA              	   235:         tax
+00:C109 68              	   236:         pla
+00:C10A 40              	   237:         rti
+                        	   238: 
+                        	   239:         ;; Routine to print HH:MM:SS at screen (2 BCD digits each)
+                        	   240: print:
+00:C10B A200            	   241:         ldx #0
+00:C10D A5F7            	   242:         lda hours
+00:C10F 2025C1          	   243:         jsr digits$
+00:C112 A93A            	   244:         lda #$3a          ;; ':'
+00:C114 9DE007          	   245:         sta screen,x
+00:C117 E8              	   246:         inx
+00:C118 A5F8            	   247:         lda minutes
+00:C11A 2025C1          	   248:         jsr digits$
+00:C11D A93A            	   249:         lda #$3a          ;; ':'
+00:C11F 9DE007          	   250:         sta screen,x
+00:C122 E8              	   251:         inx
+00:C123 A5F9            	   252:         lda seconds
+                        	   253: digits$:
+00:C125 48              	   254:         pha
+00:C126 4A              	   255:         lsr
+00:C127 4A              	   256:         lsr
+00:C128 4A              	   257:         lsr
+00:C129 4A              	   258:         lsr
+00:C12A 0930            	   259:         ora #$30          ;; BCD nibble -> screen code
+00:C12C 9DE007          	   260:         sta screen,x
+00:C12F E8              	   261:         inx
+00:C130 68              	   262:         pla
+00:C131 290F            	   263:         and #$0f
+00:C133 0930            	   264:         ora #$30
+00:C135 9DE007          	   265:         sta screen,x
+00:C138 E8              	   266:         inx
+00:C139 60              	   267:         rts
+                        	   268: 
+
+
+Symbols by name:
+bin2bcd                          A:C0AB
+ci2cra                           E:DD0E
+ci2crb                           E:DD0F
+ci2icr                           E:DD0D
+ci2tia                           E:DD04
+ci2tib                           E:DD06
+comma                            E:AEFD
+facwrd                           E:B7F7
+frmnum                           E:AD8A
+hours                            E:00F7
+illqua                           E:B248
+isr                              A:C0C6
+jtable                           A:C000
+linnum                           E:0014
+minutes                          E:00F8
+nmivec                           E:0318
+print                            A:C10B
+restart                          A:C09D
+screen                           E:07E0
+seconds                          E:00F9
+settime                          A:C00C
+start                            A:C063
+stop                             A:C094
+temp                             E:00FA
+
+Symbols by value:
+0014 linnum
+00F7 hours
+00F8 minutes
+00F9 seconds
+00FA temp
+0318 nmivec
+07E0 screen
+AD8A frmnum
+AEFD comma
+B248 illqua
+B7F7 facwrd
+C000 jtable
+C00C settime
+C063 start
+C094 stop
+C09D restart
+C0AB bin2bcd
+C0C6 isr
+C10B print
+DD04 ci2tia
+DD06 ci2tib
+DD0D ci2icr
+DD0E ci2cra
+DD0F ci2crb

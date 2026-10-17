@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-NAMES='multi multi2'
+NAMES='multi1 multi2'
 
 for name in $NAMES
 do
