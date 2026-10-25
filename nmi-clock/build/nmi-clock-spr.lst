@@ -1,5 +1,5 @@
 Sections:
-00: "org0001:c000" (C000-C23D)
+00: "org0001:c000" (C000-C23A)
 
 
 Source: "src/nmi-clock-spr.asm"
@@ -41,477 +41,530 @@ Source: "src/nmi-clock-spr.asm"
                         	    36: :
                         	    37:         .endm
                         	    38: 
-                        	    39:         ;; CIA2 registers
-                        	    40:         ;; --------------
-                        	    41: ci2pra: .equ $dd00              ;.byte data port register A
-                        	    42: c2ddra: .equ $dd02              ;.byte data direction register A
-                        	    43: ci2tia: .equ $dd04              ;.word Timer A
-                        	    44: ci2tib: .equ $dd06              ;.word Timer B
-                        	    45: ci2icr: .equ $dd0d              ;.byte Interrupt ctrl register
-                        	    46: ci2cra: .equ $dd0e              ;.byte Timer A ctrl register
-                        	    47: ci2crb: .equ $dd0f              ;.byte Timer B ctrl register
-                        	    48: 
-                        	    49:         ;; VIC-II registers
-                        	    50:         ;; -----------------
-                        	    51: sprxlo: .equ $d000              ;.byte sprite X positions (low)
-                        	    52: sprylo: .equ $d001              ;.byte sprite Y positions
-                        	    53: sprxhi: .equ $d010              ;.byte sprite X positions (high)
-                        	    54: spena:  .equ $d015              ;.byte sprite enable
-                        	    55: vmcsb:  .equ $d018              ;.byte memory ctrl register
-                        	    56: sp0col: .equ $d027              ;.byte sprite colors (0-7)
-                        	    57: 
-                        	    58:         ;; System Memory Locations
-                        	    59:         ;; -----------------------
-                        	    60: nmivec: .equ $0318              ;kernal indirect NMI vector
-                        	    61: hibase: .equ $0288              ;high byte of KERNAL screen base
-                        	    62: sprptr: .equ $c7f8              ;sprite pointers (end of screen RAM $c400+$3f8)
-                        	    63: glyphs: .equ $c800              ;sprite glyph buffer (11 x 64 bytes)
-                        	    64: sprbase:.equ $20                ;glyphs offset $0800 / 64 in VIC bank 3
-                        	    65: 
-                        	    66:         ;; Sprite anchor = top-left pixel of the first clock cell
-                        	    67:         ;; (text row 24, column 32; screen RAM block at $c400).
-                        	    68:         ;;
-                        	    69:         ;; VIC-II sprite coordinates are measured from the top-left of
-                        	    70:         ;; the border, NOT the visible screen.  The visible text area
-                        	    71:         ;; starts at sprite coordinate X = 24, Y = 50, so a text cell
-                        	    72:         ;; (col,row) maps to:
-                        	    73:         ;;     sprite X = 24 + col*8     sprite Y = 50 + row*8
-                        	    74:         ;;
-                        	    75:         ;; Sprite 0 is the left-most column (32).
-                        	    76: sprx0:  .equ 24 + (32*8)            ;sprite 0 X (col 32 -> sprite X 280)
-                        	    77: spry0:  .equ 50 + (24*8)            ;sprite Y  (row 24 -> sprite Y 242)
+                        	    39:         ;; BCD +1 on \val; wrap to 0 at \lim, else branch to \tgt
+                        	    40:         ;; (seconds/minutes/hours roll over at 60/60/24)
+                        	    41: bump:   .macro val, lim, tgt
+                        	    42:         clc
+                        	    43:         lda \val
+                        	    44:         adc #1
+                        	    45:         sta \val
+                        	    46:         cmp #\lim
+                        	    47:         bne \tgt
+                        	    48:         lda #0
+                        	    49:         sta \val
+                        	    50:         .endm
+                        	    51: 
+                        	    52:         ;; Copy \np 256-byte pages (ptr1),y -> (\dst),y (\inc2=1
+                        	    53:         ;; if the destination is a second pointer needing a bump)
+                        	    54: copyblk: .macro dst, np, inc2
+                        	    55:         ldx #\np
+                        	    56: :
+                        	    57:         ldy #0
+                        	    58: :
+                        	    59:         lda (ptr1),y
+                        	    60:         sta (\dst),y
+                        	    61:         iny
+                        	    62:         bne :-
+                        	    63:         inc ptr1+1
+                        	    64:         .if \inc2
+                        	    65:         inc \dst+1
+                        	    66:         .endif
+                        	    67:         dex
+                        	    68:         bne :--
+                        	    69:         .endm
+                        	    70: 
+                        	    71:         ;; Store word \val (little-endian) at low/high pair \reg
+                        	    72: setw:   .macro reg, val
+                        	    73:         lda #<\val
+                        	    74:         sta \reg
+                        	    75:         lda #>\val
+                        	    76:         sta \reg+1
+                        	    77:         .endm
                         	    78: 
-                        	    79:         ;; OS routines
-                        	    80:         ;; -----------
-                        	    81: frmnum: .equ $ad8a              ;eval numeric expression
-                        	    82: comma:  .equ $aefd              ;detect comma in BASIC line
-                        	    83: facwrd: .equ $b7f7              ;convert FAC #1 to word at linnum
-                        	    84: illqua: .equ $b248              ;raise illegal qty error
-                        	    85: setpnt: .equ $e56c              ;refresh KERNAL screen/color pointers
-                        	    86: 
-                        	    87:         ;; OS memory
-                        	    88:         ;; ---------
-                        	    89: linnum: .ezp $14                ;.word BASIC line number
-                        	    90: 
-                        	    91:         ;; Temporary working memory (ZP)
-                        	    92:         ;; -----------------------------
-                        	    93: temp:     .ezp $fa                ;.byte Scratch pad
-                        	    94: ptr1:     .ezp $5b                ;.word Scratch pointer
-                        	    95: ptr2:     .ezp $5d                ;.word Scratch pointer
-                        	    96: 
-                        	    97:         .org $c000
-                        	    98: 
-                        	    99:         ;; Jump table
-                        	   100:         ;; ----------
-00:C000 4C0CC0          	   101: jtable: jmp settime
-00:C003 4C66C0          	   102:         jmp start
-00:C006 4C9AC0          	   103:         jmp stop
-00:C009 4CA3C0          	   104:         jmp restart
+                        	    79:         ;; CIA2 registers
+                        	    80:         ;; --------------
+                        	    81: ci2pra: .equ $dd00              ;.byte data port register A
+                        	    82: c2ddra: .equ $dd02              ;.byte data direction register A
+                        	    83: ci2tia: .equ $dd04              ;.word Timer A
+                        	    84: ci2tib: .equ $dd06              ;.word Timer B
+                        	    85: ci2icr: .equ $dd0d              ;.byte Interrupt ctrl register
+                        	    86: ci2cra: .equ $dd0e              ;.byte Timer A ctrl register
+                        	    87: ci2crb: .equ $dd0f              ;.byte Timer B ctrl register
+                        	    88: 
+                        	    89:         ;; VIC-II registers
+                        	    90:         ;; -----------------
+                        	    91: sprxlo: .equ $d000              ;.byte sprite X positions (low)
+                        	    92: sprylo: .equ $d001              ;.byte sprite Y positions
+                        	    93: sprxhi: .equ $d010              ;.byte sprite X positions (high)
+                        	    94: spena:  .equ $d015              ;.byte sprite enable
+                        	    95: vmcsb:  .equ $d018              ;.byte memory ctrl register
+                        	    96: sp0col: .equ $d027              ;.byte sprite colors (0-7)
+                        	    97: 
+                        	    98:         ;; System Memory Locations
+                        	    99:         ;; -----------------------
+                        	   100: nmivec: .equ $0318              ;kernal indirect NMI vector
+                        	   101: hibase: .equ $0288              ;high byte of KERNAL screen base
+                        	   102: sprptr: .equ $c7f8              ;sprite pointers (end of screen RAM $c400+$3f8)
+                        	   103: glyphs: .equ $c800              ;sprite glyph buffer (11 x 64 bytes)
+                        	   104: sprbase:.equ $20                ;glyphs offset $0800 / 64 in VIC bank 3
                         	   105: 
-                        	   106:         ;; Routines
-                        	   107:         ;; --------
-                        	   108: 
-                        	   109:         ;; Routine to set the time from user input
-                        	   110:         ;; and start the clock.
-                        	   111:         ;; Called from BASIC via jump table entry:
-                        	   112:         ;;      SYS(49152) hrs (0-23), min (0-59), sec (0-59)
-                        	   113:         ;;
-                        	   114:         ;; E.g. SYS(49152) 11,51,20
-                        	   115: settime:
-                        	   116:         ;; Hours
-00:C00C 2060C0          	   117:         jsr getwrd$
-00:C00F A515            	   118:         lda linnum+1
-                        	   119:         jne illqua
-00:C011 F003            	     1M         beq :+
-00:C013 4C48B2          	     2M         jmp illqua
-                        	     3M :
-00:C016 A514            	   120:         lda linnum
-00:C018 C918            	   121:         cmp #24
-                        	   122:         jcs illqua
-00:C01A 9003            	     1M         bcc :+
-00:C01C 4C48B2          	     2M         jmp illqua
-                        	     3M :
-00:C01F 20B4C0          	   123:         jsr bin2bcd
-00:C022 8D3AC2          	   124:         sta hours
-                        	   125:         ;; Minutes
-00:C025 20FDAE          	   126:         jsr comma
-00:C028 2060C0          	   127:         jsr getwrd$
-00:C02B A515            	   128:         lda linnum+1
-                        	   129:         jne illqua
-00:C02D F003            	     1M         beq :+
-00:C02F 4C48B2          	     2M         jmp illqua
-                        	     3M :
-00:C032 A514            	   130:         lda linnum
-00:C034 C93C            	   131:         cmp #60
-                        	   132:         jcs illqua
-00:C036 9003            	     1M         bcc :+
-00:C038 4C48B2          	     2M         jmp illqua
-                        	     3M :
-00:C03B 20B4C0          	   133:         jsr bin2bcd
-00:C03E 8D3BC2          	   134:         sta minutes
-                        	   135:         ;; Seconds
-00:C041 20FDAE          	   136:         jsr comma
-00:C044 2060C0          	   137:         jsr getwrd$
-00:C047 A515            	   138:         lda linnum+1
-                        	   139:         jne illqua
-00:C049 F003            	     1M         beq :+
-00:C04B 4C48B2          	     2M         jmp illqua
-                        	     3M :
-00:C04E A514            	   140:         lda linnum
-00:C050 C93C            	   141:         cmp #60
-                        	   142:         jcs illqua
-00:C052 9003            	     1M         bcc :+
-00:C054 4C48B2          	     2M         jmp illqua
-                        	     3M :
-00:C057 20B4C0          	   143:         jsr bin2bcd
-00:C05A 8D3CC2          	   144:         sta seconds
-00:C05D 4C66C0          	   145:         jmp start
-                        	   146: 
-                        	   147: getwrd$:
-00:C060 208AAD          	   148:         jsr frmnum
-00:C063 4CF7B7          	   149:         jmp facwrd
-                        	   150: 
-                        	   151:         ;; Routine to start the NMI timer
-                        	   152:         ;; Called from BASIC via jump table entry:
-                        	   153:         ;;      SYS49155
-                        	   154: start:
-00:C066 201DC1          	   155:         jsr initspr      ;; build sprite glyphs, position/enable sprites
-                        	   156: 
-00:C069 A9E7            	   157:         lda #$e7         ;; timer A = 20,455 (PAL)
-00:C06B 8D04DD          	   158:         sta ci2tia
-00:C06E A94F            	   159:         lda #$4f
-00:C070 8D05DD          	   160:         sta ci2tia+1
-00:C073 A932            	   161:         lda #50          ;; timer B = 50 A-underflows
-00:C075 8D06DD          	   162:         sta ci2tib
-00:C078 A900            	   163:         lda #0
-00:C07A 8D07DD          	   164:         sta ci2tib+1
-                        	   165: 
-00:C07D A911            	   166:         lda #%00010001
-00:C07F 8D0EDD          	   167:         sta ci2cra       ;; start timer A
-00:C082 A951            	   168:         lda #%01010001
-00:C084 8D0FDD          	   169:         sta ci2crb       ;; B counts A underflows, start
-                        	   170: 
-00:C087 AD0DDD          	   171:         lda ci2icr
-00:C08A 0982            	   172:         ora #%10000010
-00:C08C 8D0DDD          	   173:         sta ci2icr       ;; enable timer B -> NMI
+                        	   106:         ;; Sprite anchor = top-left pixel of the first clock cell
+                        	   107:         ;; (text row 24, column 32; screen RAM block at $c400).
+                        	   108:         ;;
+                        	   109:         ;; VIC-II sprite coordinates are measured from the top-left of
+                        	   110:         ;; the border, NOT the visible screen.  The visible text area
+                        	   111:         ;; starts at sprite coordinate X = 24, Y = 50, so a text cell
+                        	   112:         ;; (col,row) maps to:
+                        	   113:         ;;     sprite X = 24 + col*8     sprite Y = 50 + row*8
+                        	   114:         ;;
+                        	   115:         ;; Sprite 0 is the left-most column (32).
+                        	   116: sprx0:  .equ 24 + (32*8)            ;sprite 0 X (col 32 -> sprite X 280)
+                        	   117: spry0:  .equ 50 + (24*8)            ;sprite Y  (row 24 -> sprite Y 242)
+                        	   118: 
+                        	   119:         ;; OS routines
+                        	   120:         ;; -----------
+                        	   121: frmnum: .equ $ad8a              ;eval numeric expression
+                        	   122: comma:  .equ $aefd              ;detect comma in BASIC line
+                        	   123: facwrd: .equ $b7f7              ;convert FAC #1 to word at linnum
+                        	   124: illqua: .equ $b248              ;raise illegal qty error
+                        	   125: setpnt: .equ $e56c              ;refresh KERNAL screen/color pointers
+                        	   126: 
+                        	   127:         ;; OS memory
+                        	   128:         ;; ---------
+                        	   129: linnum: .ezp $14                ;.word BASIC line number
+                        	   130: 
+                        	   131:         ;; Temporary working memory (ZP)
+                        	   132:         ;; -----------------------------
+                        	   133: temp:     .ezp $fa                ;.byte Scratch pad
+                        	   134: ptr1:     .ezp $5b                ;.word Scratch pointer
+                        	   135: ptr2:     .ezp $5d                ;.word Scratch pointer
+                        	   136: 
+                        	   137:         .org $c000
+                        	   138: 
+                        	   139:         ;; Jump table
+                        	   140:         ;; ----------
+00:C000 4C0CC0          	   141: jtable: jmp settime
+00:C003 4C63C0          	   142:         jmp start
+00:C006 4C97C0          	   143:         jmp stop
+00:C009 4CA0C0          	   144:         jmp restart
+                        	   145: 
+                        	   146:         ;; Routines
+                        	   147:         ;; --------
+                        	   148: 
+                        	   149:         ;; Routine to set the time from user input
+                        	   150:         ;; and start the clock.
+                        	   151:         ;; Called from BASIC via jump table entry:
+                        	   152:         ;;      SYS(49152) hrs (0-23), min (0-59), sec (0-59)
+                        	   153:         ;;
+                        	   154:         ;; E.g. SYS(49152) 11,51,20
+                        	   155: settime:
+                        	   156:         ;; Hours
+00:C00C A918            	   157:         lda #24
+00:C00E 85FA            	   158:         sta temp
+                        	   159:         setw ptr1, hours
+00:C010 A937            	     1M         lda #<hours
+00:C012 855B            	     2M         sta ptr1
+00:C014 A9C2            	     3M         lda #>hours
+00:C016 855C            	     4M         sta ptr1+1
+00:C018 2042C0          	   160:         jsr setfield$
+                        	   161:         ;; Minutes
+00:C01B 20FDAE          	   162:         jsr comma
+00:C01E A93C            	   163:         lda #60
+00:C020 85FA            	   164:         sta temp
+                        	   165:         setw ptr1, minutes
+00:C022 A938            	     1M         lda #<minutes
+00:C024 855B            	     2M         sta ptr1
+00:C026 A9C2            	     3M         lda #>minutes
+00:C028 855C            	     4M         sta ptr1+1
+00:C02A 2042C0          	   166:         jsr setfield$
+                        	   167:         ;; Seconds
+00:C02D 20FDAE          	   168:         jsr comma
+00:C030 A93C            	   169:         lda #60
+00:C032 85FA            	   170:         sta temp
+                        	   171:         setw ptr1, seconds
+00:C034 A939            	     1M         lda #<seconds
+00:C036 855B            	     2M         sta ptr1
+00:C038 A9C2            	     3M         lda #>seconds
+00:C03A 855C            	     4M         sta ptr1+1
+00:C03C 2042C0          	   172:         jsr setfield$
+00:C03F 4C63C0          	   173:         jmp start
                         	   174: 
-00:C08F A9CF            	   175:         lda #<isr        ;; hook NMI
-00:C091 8D1803          	   176:         sta nmivec
-00:C094 A9C0            	   177:         lda #>isr
-00:C096 8D1903          	   178:         sta nmivec+1
-00:C099 60              	   179:         rts
-                        	   180: 
-                        	   181:         ;; Routine to stop the NMI timer
-                        	   182:         ;; Called from BASIC via jump table entry:
-                        	   183:         ;;      SYS49158
-                        	   184: stop:
-00:C09A A97F            	   185:         lda #$7f
-00:C09C 8D0DDD          	   186:         sta ci2icr
-00:C09F AD0DDD          	   187:         lda ci2icr
-00:C0A2 60              	   188:         rts
-                        	   189: 
-                        	   190:         ;; Routine to stop timer, reset time to 00:00:00
-                        	   191:         ;; and then restart timer.
-                        	   192:         ;; Called from BASIC via jump table entry:
-                        	   193:         ;;      SYS49161
-                        	   194: restart:
-00:C0A3 209AC0          	   195:         jsr stop
-00:C0A6 A900            	   196:         lda #0
-00:C0A8 8D3AC2          	   197:         sta hours
-00:C0AB 8D3BC2          	   198:         sta minutes
-00:C0AE 8D3CC2          	   199:         sta seconds
-00:C0B1 4C66C0          	   200:         jmp start
-                        	   201: 
-                        	   202:         ;; Routine to convert byte in .A to packed BCD
-                        	   203: bin2bcd:
-00:C0B4 A200            	   204:         ldx #0
-00:C0B6 A8              	   205:         tay
-                        	   206: tens$:
-00:C0B7 C00A            	   207:         cpy #10
-00:C0B9 9009            	   208:         bcc ones$
-00:C0BB 98              	   209:         tya
-00:C0BC 38              	   210:         sec
-00:C0BD E90A            	   211:         sbc #10
-00:C0BF A8              	   212:         tay
-00:C0C0 E8              	   213:         inx
-00:C0C1 4CB7C0          	   214:         jmp tens$
-                        	   215: ones$:
-00:C0C4 8A              	   216:         txa
-00:C0C5 0A              	   217:         asl
-00:C0C6 0A              	   218:         asl
-00:C0C7 0A              	   219:         asl
-00:C0C8 0A              	   220:         asl
-00:C0C9 85FA            	   221:         sta temp
-00:C0CB 98              	   222:         tya
-00:C0CC 05FA            	   223:         ora temp
-00:C0CE 60              	   224:         rts
-                        	   225: 
-                        	   226:         ;; NMI service routine: called once per second
-                        	   227: isr:
-                        	   228:         ;; Save x,y,acc
-00:C0CF 48              	   229:         pha
-00:C0D0 8A              	   230:         txa
-00:C0D1 48              	   231:         pha
-00:C0D2 98              	   232:         tya
-00:C0D3 48              	   233:         pha
-                        	   234: 
-00:C0D4 AC0DDD          	   235:         ldy ci2icr       ;; read clears pending flag
-00:C0D7 98              	   236:         tya
-00:C0D8 2902            	   237:         and #$02
-00:C0DA F03B            	   238:         beq exit$
-                        	   239: 
-00:C0DC F8              	   240:         sed               ;; BCD +1 second, with 60/60/24 rollover
-00:C0DD 18              	   241:         clc
-00:C0DE AD3CC2          	   242:         lda seconds
-00:C0E1 6901            	   243:         adc #1
-00:C0E3 8D3CC2          	   244:         sta seconds
-00:C0E6 C960            	   245:         cmp #$60
-00:C0E8 D029            	   246:         bne done$         ;; seconds < 60: no carry
-                        	   247: 
-00:C0EA A900            	   248:         lda #0            ;; seconds == 60 -> wrap to :00
-00:C0EC 8D3CC2          	   249:         sta seconds
-00:C0EF 18              	   250:         clc
-00:C0F0 AD3BC2          	   251:         lda minutes
-00:C0F3 6901            	   252:         adc #1
-00:C0F5 8D3BC2          	   253:         sta minutes
-00:C0F8 C960            	   254:         cmp #$60
-00:C0FA D017            	   255:         bne done$         ;; minutes < 60: no carry
-                        	   256: 
-00:C0FC A900            	   257:         lda #0            ;; minutes == 60 -> wrap to :00
-00:C0FE 8D3BC2          	   258:         sta minutes
-00:C101 18              	   259:         clc
-00:C102 AD3AC2          	   260:         lda hours
-00:C105 6901            	   261:         adc #1
-00:C107 8D3AC2          	   262:         sta hours
-00:C10A C924            	   263:         cmp #$24
-00:C10C D005            	   264:         bne done$         ;; hours < 24: no wrap
-                        	   265: 
-00:C10E A900            	   266:         lda #0            ;; hours == 24 -> wrap to 00
-00:C110 8D3AC2          	   267:         sta hours
-                        	   268: done$:
-00:C113 D8              	   269:         cld
-00:C114 2006C2          	   270:         jsr print
-                        	   271: exit$:
-00:C117 68              	   272:         pla
-00:C118 A8              	   273:         tay
-00:C119 68              	   274:         pla
-00:C11A AA              	   275:         tax
-00:C11B 68              	   276:         pla
-00:C11C 40              	   277:         rti
-                        	   278: 
-                        	   279:         ;; Routine to build the '0'-'9' and ':' sprite shapes
-                        	   280:         ;; from the chargen ROM, then position, color and
-                        	   281:         ;; point the 8 clock sprites at them.
-                        	   282: initspr:
-00:C11D 78              	   283:         sei
-00:C11E D8              	   284:         cld
-                        	   285: 
-                        	   286:         ;; Preserve the visible screen before moving it from $0400
-                        	   287:         ;; to $c400 in the new VIC bank.
-00:C11F A900            	   288:         lda #$00
-00:C121 855B            	   289:         sta ptr1
-00:C123 855D            	   290:         sta ptr2
-00:C125 A904            	   291:         lda #$04
-00:C127 855C            	   292:         sta ptr1+1
-00:C129 A9C4            	   293:         lda #$c4
-00:C12B 855E            	   294:         sta ptr2+1
-00:C12D A204            	   295:         ldx #4
-                        	   296: scr$:
-00:C12F A000            	   297:         ldy #0
-                        	   298: scrbyte$:
-00:C131 B15B            	   299:         lda (ptr1),y
-00:C133 915D            	   300:         sta (ptr2),y
-00:C135 C8              	   301:         iny
-00:C136 D0F9            	   302:         bne scrbyte$
-00:C138 E65C            	   303:         inc ptr1+1
-00:C13A E65E            	   304:         inc ptr2+1
-00:C13C CA              	   305:         dex
-00:C13D D0F0            	   306:         bne scr$
+                        	   175:         ;; Routine to read one HH:MM:SS field from BASIC, range check it
+                        	   176:         ;; against temp and store it as packed BCD in ptr1.
+                        	   177:         ;; temp: max value
+                        	   178:         ;; ptr1: pointer to location to store value
+                        	   179: setfield$:
+00:C042 205DC0          	   180:         jsr getwrd$
+00:C045 A515            	   181:         lda linnum+1
+                        	   182:         jne illqua
+00:C047 F003            	     1M         beq :+
+00:C049 4C48B2          	     2M         jmp illqua
+                        	     3M :
+00:C04C A514            	   183:         lda linnum
+00:C04E C5FA            	   184:         cmp temp
+                        	   185:         jcs illqua
+00:C050 9003            	     1M         bcc :+
+00:C052 4C48B2          	     2M         jmp illqua
+                        	     3M :
+00:C055 20B1C0          	   186:         jsr bin2bcd
+00:C058 A000            	   187:         ldy #0
+00:C05A 915B            	   188:         sta (ptr1),y
+00:C05C 60              	   189:         rts  
+                        	   190: 
+                        	   191: getwrd$:
+00:C05D 208AAD          	   192:         jsr frmnum
+00:C060 4CF7B7          	   193:         jmp facwrd
+                        	   194: 
+                        	   195:         ;; Routine to start the NMI timer
+                        	   196:         ;; Called from BASIC via jump table entry:
+                        	   197:         ;;      SYS49155
+                        	   198: start:
+00:C063 201AC1          	   199:         jsr initspr      ;; build sprite glyphs, position/enable sprites
+                        	   200: 
+                        	   201:         setw ci2tia, $4fe7      ;; timer A = 20,455 (PAL)
+00:C066 A9E7            	     1M         lda #<$4fe7      
+00:C068 8D04DD          	     2M         sta ci2tia
+00:C06B A94F            	     3M         lda #>$4fe7      
+00:C06D 8D05DD          	     4M         sta ci2tia+1
+                        	   202:         setw ci2tib, 50         ;; timer B = 50 A-underflows
+00:C070 A932            	     1M         lda #<50         
+00:C072 8D06DD          	     2M         sta ci2tib
+00:C075 A900            	     3M         lda #>50         
+00:C077 8D07DD          	     4M         sta ci2tib+1
+00:C07A A911            	   203:         lda #%00010001
+00:C07C 8D0EDD          	   204:         sta ci2cra       ;; start timer A
+00:C07F A951            	   205:         lda #%01010001
+00:C081 8D0FDD          	   206:         sta ci2crb       ;; B counts A underflows, start
+                        	   207: 
+00:C084 AD0DDD          	   208:         lda ci2icr
+00:C087 0982            	   209:         ora #%10000010
+00:C089 8D0DDD          	   210:         sta ci2icr       ;; enable timer B -> NMI
+                        	   211: 
+                        	   212:         setw nmivec, isr        ;; hook NMI
+00:C08C A9CC            	     1M         lda #<isr        
+00:C08E 8D1803          	     2M         sta nmivec
+00:C091 A9C0            	     3M         lda #>isr        
+00:C093 8D1903          	     4M         sta nmivec+1
+                        	   213: 
+00:C096 60              	   214:         rts
+                        	   215: 
+                        	   216:         ;; Routine to stop the NMI timer
+                        	   217:         ;; Called from BASIC via jump table entry:
+                        	   218:         ;;      SYS49158
+                        	   219: stop:
+00:C097 A97F            	   220:         lda #$7f
+00:C099 8D0DDD          	   221:         sta ci2icr
+00:C09C AD0DDD          	   222:         lda ci2icr
+00:C09F 60              	   223:         rts
+                        	   224: 
+                        	   225:         ;; Routine to stop timer, reset time to 00:00:00
+                        	   226:         ;; and then restart timer.
+                        	   227:         ;; Called from BASIC via jump table entry:
+                        	   228:         ;;      SYS49161
+                        	   229: restart:
+00:C0A0 2097C0          	   230:         jsr stop
+00:C0A3 A900            	   231:         lda #0
+00:C0A5 8D37C2          	   232:         sta hours
+00:C0A8 8D38C2          	   233:         sta minutes
+00:C0AB 8D39C2          	   234:         sta seconds
+00:C0AE 4C63C0          	   235:         jmp start
+                        	   236: 
+                        	   237:         ;; Routine to convert byte in .A to packed BCD
+                        	   238: bin2bcd:
+00:C0B1 A200            	   239:         ldx #0
+00:C0B3 A8              	   240:         tay
+                        	   241: tens$:
+00:C0B4 C00A            	   242:         cpy #10
+00:C0B6 9009            	   243:         bcc ones$
+00:C0B8 98              	   244:         tya
+00:C0B9 38              	   245:         sec
+00:C0BA E90A            	   246:         sbc #10
+00:C0BC A8              	   247:         tay
+00:C0BD E8              	   248:         inx
+00:C0BE 4CB4C0          	   249:         jmp tens$
+                        	   250: ones$:
+00:C0C1 8A              	   251:         txa
+00:C0C2 0A              	   252:         asl
+00:C0C3 0A              	   253:         asl
+00:C0C4 0A              	   254:         asl
+00:C0C5 0A              	   255:         asl
+00:C0C6 85FA            	   256:         sta temp
+00:C0C8 98              	   257:         tya
+00:C0C9 05FA            	   258:         ora temp
+00:C0CB 60              	   259:         rts
+                        	   260: 
+                        	   261:         ;; NMI service routine: called once per second
+                        	   262: isr:
+                        	   263:         ;; Save x,y,acc
+00:C0CC 48              	   264:         pha
+00:C0CD 8A              	   265:         txa
+00:C0CE 48              	   266:         pha
+00:C0CF 98              	   267:         tya
+00:C0D0 48              	   268:         pha
+                        	   269: 
+00:C0D1 AC0DDD          	   270:         ldy ci2icr       ;; read clears pending flag
+00:C0D4 98              	   271:         tya
+00:C0D5 2902            	   272:         and #$02
+00:C0D7 F03B            	   273:         beq exit$
+                        	   274: 
+00:C0D9 F8              	   275:         sed               ;; BCD +1 second, with 60/60/24 rollover
+                        	   276:         bump seconds, $60, done$      ;; seconds < 60: no carry
+00:C0DA 18              	     1M         clc
+00:C0DB AD39C2          	     2M         lda seconds
+00:C0DE 6901            	     3M         adc #1
+00:C0E0 8D39C2          	     4M         sta seconds
+00:C0E3 C960            	     5M         cmp #$60
+00:C0E5 D029            	     6M         bne done$      
+00:C0E7 A900            	     7M         lda #0
+00:C0E9 8D39C2          	     8M         sta seconds
+                        	   277:         bump minutes, $60, done$      ;; minutes < 60: no carry
+00:C0EC 18              	     1M         clc
+00:C0ED AD38C2          	     2M         lda minutes
+00:C0F0 6901            	     3M         adc #1
+00:C0F2 8D38C2          	     4M         sta minutes
+00:C0F5 C960            	     5M         cmp #$60
+00:C0F7 D017            	     6M         bne done$      
+00:C0F9 A900            	     7M         lda #0
+00:C0FB 8D38C2          	     8M         sta minutes
+                        	   278:         bump hours, $24, done$        ;; hours < 24: no wrap
+00:C0FE 18              	     1M         clc
+00:C0FF AD37C2          	     2M         lda hours
+00:C102 6901            	     3M         adc #1
+00:C104 8D37C2          	     4M         sta hours
+00:C107 C924            	     5M         cmp #$24
+00:C109 D005            	     6M         bne done$        
+00:C10B A900            	     7M         lda #0
+00:C10D 8D37C2          	     8M         sta hours
+                        	   279: done$:
+00:C110 D8              	   280:         cld
+00:C111 2003C2          	   281:         jsr print
+                        	   282: exit$:
+00:C114 68              	   283:         pla
+00:C115 A8              	   284:         tay
+00:C116 68              	   285:         pla
+00:C117 AA              	   286:         tax
+00:C118 68              	   287:         pla
+00:C119 40              	   288:         rti
+                        	   289: 
+                        	   290:         ;; Routine to build the '0'-'9' and ':' sprite shapes
+                        	   291:         ;; from the chargen ROM, then position, color and
+                        	   292:         ;; point the 8 clock sprites at them.
+                        	   293: initspr:
+00:C11A 78              	   294:         sei
+00:C11B D8              	   295:         cld
+                        	   296: 
+                        	   297:         ;; Preserve the visible screen before moving it from $0400
+                        	   298:         ;; to $c400 in the new VIC bank.
+00:C11C A900            	   299:         lda #$00
+00:C11E 855B            	   300:         sta ptr1
+00:C120 855D            	   301:         sta ptr2
+00:C122 A904            	   302:         lda #$04
+00:C124 855C            	   303:         sta ptr1+1
+00:C126 A9C4            	   304:         lda #$c4
+00:C128 855E            	   305:         sta ptr2+1
+                        	   306:         copyblk ptr2, 4, 1
+00:C12A A204            	     1M         ldx #4
+                        	     2M :
+00:C12C A000            	     3M         ldy #0
+                        	     4M :
+00:C12E B15B            	     5M         lda (ptr1),y
+00:C130 915D            	     6M         sta (ptr2),y
+00:C132 C8              	     7M         iny
+00:C133 D0F9            	     8M         bne :-
+00:C135 E65C            	     9M         inc ptr1+1
+                        	    10M         .if 1
+00:C137 E65E            	    11M         inc ptr2+1
+                        	    12M         .endif
+00:C139 CA              	    13M         dex
+00:C13A D0F0            	    14M         bne :--
                         	   307: 
                         	   308:         ;; Copy all 2 KiB of the chargen ROM into the RAM beneath it.
                         	   309:         ;; Reads see ROM and writes to the same address reach RAM.
-00:C13F A501            	   310:         lda $01
-00:C141 48              	   311:         pha                     ;save current CPU config
-00:C142 A933            	   312:         lda #$33
-00:C144 8501            	   313:         sta $01                 ;LORAM=1, HIRAM=1 CHAREN=0
-00:C146 A900            	   314:         lda #$00
-00:C148 855B            	   315:         sta ptr1
-00:C14A A9D0            	   316:         lda #$d0
-00:C14C 855C            	   317:         sta ptr1+1
-00:C14E A208            	   318:         ldx #8
-                        	   319: chrpage$:
-00:C150 A000            	   320:         ldy #0
-                        	   321: chrbyte$:
-00:C152 B15B            	   322:         lda (ptr1),y
-00:C154 915B            	   323:         sta (ptr1),y
-00:C156 C8              	   324:         iny
-00:C157 D0F9            	   325:         bne chrbyte$
-00:C159 E65C            	   326:         inc ptr1+1
-00:C15B CA              	   327:         dex
-00:C15C D0F2            	   328:         bne chrpage$
-                        	   329: 
-                        	   330:         ;; 11 glyphs: src = $d180 + g*8 ('0' = ASCII $30),
-                        	   331:         ;;            dst = $c800 + g*64.
-00:C15E A900            	   332:         lda #<glyphs
-00:C160 855B            	   333:         sta ptr1
-00:C162 A9C8            	   334:         lda #>glyphs
-00:C164 855C            	   335:         sta ptr1+1
-00:C166 A200            	   336:         ldx #0
-                        	   337: gly$:
-00:C168 8A              	   338:         txa
-00:C169 0A              	   339:         asl
-00:C16A 0A              	   340:         asl
-00:C16B 0A              	   341:         asl
-00:C16C 18              	   342:         clc
-00:C16D 6980            	   343:         adc #$80
-00:C16F 855D            	   344:         sta ptr2
-00:C171 A9D1            	   345:         lda #$d1
-00:C173 855E            	   346:         sta ptr2+1           ;; src = $d100 + $80 + g*8
-00:C175 A900            	   347:         lda #0               ;; clear the 64-byte sprite block
-00:C177 A03F            	   348:         ldy #63
-                        	   349: zro$:
-00:C179 915B            	   350:         sta (ptr1),y
-00:C17B 88              	   351:         dey
-00:C17C 10FB            	   352:         bpl zro$
-00:C17E A000            	   353:         ldy #0               ;; glyph row n -> sprite byte n*3
-                        	   354: row$:
-00:C180 B15D            	   355:         lda (ptr2),y
-00:C182 48              	   356:         pha
-00:C183 98              	   357:         tya
-00:C184 85FA            	   358:         sta temp
-00:C186 0A              	   359:         asl
-00:C187 65FA            	   360:         adc temp             ;; 3*n
-00:C189 A8              	   361:         tay
-00:C18A 68              	   362:         pla
-00:C18B 915B            	   363:         sta (ptr1),y
-00:C18D A4FA            	   364:         ldy temp
-00:C18F C8              	   365:         iny
-00:C190 C008            	   366:         cpy #8
-00:C192 D0EC            	   367:         bne row$
-00:C194 18              	   368:         clc                  ;; advance to the next sprite block
-00:C195 A55B            	   369:         lda ptr1
-00:C197 6940            	   370:         adc #64
-00:C199 855B            	   371:         sta ptr1
-00:C19B 9002            	   372:         bcc nxt$
-00:C19D E65C            	   373:         inc ptr1+1
-                        	   374: nxt$:
-00:C19F E8              	   375:         inx
-00:C1A0 E00B            	   376:         cpx #11
-00:C1A2 D0C4            	   377:         bne gly$
-                        	   378: 
-                        	   379:         ;; Restore I/O visibility before touching CIA2 or VIC-II.
-00:C1A4 68              	   380:         pla
-00:C1A5 8501            	   381:         sta $01
-                        	   382: 
-                        	   383:         ;; VIC bank $c000-$ffff: CIA2 PRA bits 0-1 = %00.
-00:C1A7 A903            	   384:         lda #3                  ;configure the DDR so bits 0-1
-00:C1A9 0D02DD          	   385:         ora c2ddra              ;are output bits
-00:C1AC 8D02DD          	   386:         sta c2ddra
-00:C1AF AD00DD          	   387:         lda ci2pra
-00:C1B2 29FC            	   388:         and #$fc                ;select VIC bank 3 ($c000-$ffff)
-00:C1B4 8D00DD          	   389:         sta ci2pra
-                        	   390: 
-                        	   391:         ;; Screen = $0400, charset = $1000 (bank offsets):
-                        	   392:         ;; physical $c400 screen (pointers at $c7f8-$c7ff) and
-                        	   393:         ;; the charset copied to RAM at $d000.
-00:C1B7 A90F            	   394:         lda #$0f
-00:C1B9 2D18D0          	   395:         and vmcsb
-00:C1BC 0910            	   396:         ora #$10
-00:C1BE 8D18D0          	   397:         sta vmcsb
-00:C1C1 A9F1            	   398:         lda #$f1
-00:C1C3 2D18D0          	   399:         and vmcsb
-00:C1C6 0904            	   400:         ora #$04
-00:C1C8 8D18D0          	   401:         sta vmcsb
-                        	   402: 
-                        	   403:         ;; Tell the KERNAL screen editor about the relocated screen,
-                        	   404:         ;; then refresh its pointers for the current cursor position.
-00:C1CB A9C4            	   405:         lda #$c4
-00:C1CD 8D8802          	   406:         sta hibase
-00:C1D0 206CE5          	   407:         jsr setpnt
-                        	   408: 
-                        	   409:         ;; sprite X positions (low bytes; hi bits set below):
-                        	   410:         ;; cols 32-39 => X = sprx0 + i*8, i.e. 280,288,...,336.
-00:C1D3 A200            	   411:         ldx #0
-                        	   412: xlo$:
-00:C1D5 8A              	   413:         txa
-00:C1D6 0A              	   414:         asl
-00:C1D7 0A              	   415:         asl
-00:C1D8 18              	   416:         clc
-00:C1D9 6918            	   417:         adc #<sprx0
-00:C1DB 9D00D0          	   418:         sta sprxlo,x
-00:C1DE E8              	   419:         inx
-00:C1DF E8              	   420:         inx
-00:C1E0 E010            	   421:         cpx #16
-00:C1E2 D0F1            	   422:         bne xlo$
-                        	   423:         ;; sprite Y positions: all on text row 24 (Y = 50+24*8 = 242)
-00:C1E4 A9F2            	   424:         lda #spry0
-00:C1E6 A20E            	   425:         ldx #14
-                        	   426: ylo$:
-00:C1E8 9D01D0          	   427:         sta sprylo,x
-00:C1EB CA              	   428:         dex
-00:C1EC CA              	   429:         dex
-00:C1ED 10F9            	   430:         bpl ylo$
-                        	   431:         ;; colors: all white
-00:C1EF A901            	   432:         lda #$01
-00:C1F1 A207            	   433:         ldx #7
-                        	   434: col$:
-00:C1F3 9D27D0          	   435:         sta sp0col,x
-00:C1F6 CA              	   436:         dex
-00:C1F7 10FA            	   437:         bpl col$
-                        	   438:         ;; enable sprites, set all X high bits (cols 32-39)
-00:C1F9 A9FF            	   439:         lda #$ff
-00:C1FB 8D10D0          	   440:         sta sprxhi
-00:C1FE 8D15D0          	   441:         sta spena
-                        	   442:         ;; draw the current time immediately
-00:C201 2006C2          	   443:         jsr print
-00:C204 58              	   444:         cli
-00:C205 60              	   445:         rts
-                        	   446: 
-                        	   447:         ;; Routine to update the 8 clock sprites
-                        	   448:         ;; from the BCD time (HH:MM:SS).
-                        	   449: print:
-00:C206 A200            	   450:         ldx #0           ;; sprite index
-00:C208 AD3AC2          	   451:         lda hours
-00:C20B 202CC2          	   452:         jsr digits$
-00:C20E A90A            	   453:         lda #10          ;; ':'
-00:C210 2024C2          	   454:         jsr putdgt$
-00:C213 AD3BC2          	   455:         lda minutes
-00:C216 202CC2          	   456:         jsr digits$
-00:C219 A90A            	   457:         lda #10          ;; ':'
-00:C21B 2024C2          	   458:         jsr putdgt$
-00:C21E AD3CC2          	   459:         lda seconds
-00:C221 4C2CC2          	   460:         jmp digits$
-                        	   461: 
-                        	   462:         ;; Write sprite pointer for glyph index in .A
-                        	   463: putdgt$:
-00:C224 18              	   464:         clc
-00:C225 6920            	   465:         adc #sprbase
-00:C227 9DF8C7          	   466:         sta sprptr,x
-00:C22A E8              	   467:         inx
-00:C22B 60              	   468:         rts
-                        	   469: 
-                        	   470:         ;; Write pointers for the two BCD digits of .A
-                        	   471: digits$:
-00:C22C 48              	   472:         pha
-00:C22D 4A              	   473:         lsr
-00:C22E 4A              	   474:         lsr
-00:C22F 4A              	   475:         lsr
-00:C230 4A              	   476:         lsr
-00:C231 2024C2          	   477:         jsr putdgt$       ;; tens digit
-00:C234 68              	   478:         pla
-00:C235 290F            	   479:         and #$0f
-00:C237 4C24C2          	   480:         jmp putdgt$       ;; ones digit
-                        	   481: 
-                        	   482:         ;; Persistent state must not use zero page: BASIC and the
-                        	   483:         ;; KERNAL use almost all of it as volatile working storage.
-00:C23A 00              	   484: hours:   .byte 0          ;; Time in hours BCD
-00:C23B 00              	   485: minutes: .byte 0          ;; Time in minutes BCD
-00:C23C 00              	   486: seconds: .byte 0          ;; Time in seconds BCD
-                        	   487: 
+00:C13C A501            	   310:         lda $01
+00:C13E 48              	   311:         pha                     ;save current CPU config
+00:C13F A933            	   312:         lda #$33
+00:C141 8501            	   313:         sta $01                 ;LORAM=1, HIRAM=1 CHAREN=0
+00:C143 A900            	   314:         lda #$00
+00:C145 855B            	   315:         sta ptr1
+00:C147 A9D0            	   316:         lda #$d0
+00:C149 855C            	   317:         sta ptr1+1
+                        	   318:         copyblk ptr1, 8, 0
+00:C14B A208            	     1M         ldx #8
+                        	     2M :
+00:C14D A000            	     3M         ldy #0
+                        	     4M :
+00:C14F B15B            	     5M         lda (ptr1),y
+00:C151 915B            	     6M         sta (ptr1),y
+00:C153 C8              	     7M         iny
+00:C154 D0F9            	     8M         bne :-
+00:C156 E65C            	     9M         inc ptr1+1
+                        	    10M         .if 0
+                        	    11M         inc ptr1+1
+                        	    12M         .endif
+00:C158 CA              	    13M         dex
+00:C159 D0F2            	    14M         bne :--
+                        	   319: 
+                        	   320:         ;; 11 glyphs: src = $d180 + g*8 ('0' = ASCII $30),
+                        	   321:         ;;            dst = $c800 + g*64.
+00:C15B A900            	   322:         lda #<glyphs
+00:C15D 855B            	   323:         sta ptr1
+00:C15F A9C8            	   324:         lda #>glyphs
+00:C161 855C            	   325:         sta ptr1+1
+00:C163 A200            	   326:         ldx #0
+                        	   327: gly$:
+00:C165 8A              	   328:         txa
+00:C166 0A              	   329:         asl
+00:C167 0A              	   330:         asl
+00:C168 0A              	   331:         asl
+00:C169 18              	   332:         clc
+00:C16A 6980            	   333:         adc #$80
+00:C16C 855D            	   334:         sta ptr2
+00:C16E A9D1            	   335:         lda #$d1
+00:C170 855E            	   336:         sta ptr2+1           ;; src = $d100 + $80 + g*8
+00:C172 A900            	   337:         lda #0               ;; clear the 64-byte sprite block
+00:C174 A03F            	   338:         ldy #63
+                        	   339: zro$:
+00:C176 915B            	   340:         sta (ptr1),y
+00:C178 88              	   341:         dey
+00:C179 10FB            	   342:         bpl zro$
+00:C17B A000            	   343:         ldy #0               ;; glyph row n -> sprite byte n*3
+                        	   344: row$:
+00:C17D B15D            	   345:         lda (ptr2),y
+00:C17F 48              	   346:         pha
+00:C180 98              	   347:         tya
+00:C181 85FA            	   348:         sta temp
+00:C183 0A              	   349:         asl
+00:C184 65FA            	   350:         adc temp             ;; 3*n
+00:C186 A8              	   351:         tay
+00:C187 68              	   352:         pla
+00:C188 915B            	   353:         sta (ptr1),y
+00:C18A A4FA            	   354:         ldy temp
+00:C18C C8              	   355:         iny
+00:C18D C008            	   356:         cpy #8
+00:C18F D0EC            	   357:         bne row$
+00:C191 18              	   358:         clc                  ;; advance to the next sprite block
+00:C192 A55B            	   359:         lda ptr1
+00:C194 6940            	   360:         adc #64
+00:C196 855B            	   361:         sta ptr1
+00:C198 9002            	   362:         bcc nxt$
+00:C19A E65C            	   363:         inc ptr1+1
+                        	   364: nxt$:
+00:C19C E8              	   365:         inx
+00:C19D E00B            	   366:         cpx #11
+00:C19F D0C4            	   367:         bne gly$
+                        	   368: 
+                        	   369:         ;; Restore I/O visibility before touching CIA2 or VIC-II.
+00:C1A1 68              	   370:         pla
+00:C1A2 8501            	   371:         sta $01
+                        	   372: 
+                        	   373:         ;; VIC bank $c000-$ffff: CIA2 PRA bits 0-1 = %00.
+00:C1A4 A903            	   374:         lda #3                  ;configure the DDR so bits 0-1
+00:C1A6 0D02DD          	   375:         ora c2ddra              ;are output bits
+00:C1A9 8D02DD          	   376:         sta c2ddra
+00:C1AC AD00DD          	   377:         lda ci2pra
+00:C1AF 29FC            	   378:         and #$fc                ;select VIC bank 3 ($c000-$ffff)
+00:C1B1 8D00DD          	   379:         sta ci2pra
+                        	   380: 
+                        	   381:         ;; Screen = $0400, charset = $1000 (bank offsets):
+                        	   382:         ;; physical $c400 screen (pointers at $c7f8-$c7ff) and
+                        	   383:         ;; the charset copied to RAM at $d000.
+00:C1B4 A90F            	   384:         lda #$0f
+00:C1B6 2D18D0          	   385:         and vmcsb
+00:C1B9 0910            	   386:         ora #$10
+00:C1BB 8D18D0          	   387:         sta vmcsb
+00:C1BE A9F1            	   388:         lda #$f1
+00:C1C0 2D18D0          	   389:         and vmcsb
+00:C1C3 0904            	   390:         ora #$04
+00:C1C5 8D18D0          	   391:         sta vmcsb
+                        	   392: 
+                        	   393:         ;; Tell the KERNAL screen editor about the relocated screen,
+                        	   394:         ;; then refresh its pointers for the current cursor position.
+00:C1C8 A9C4            	   395:         lda #$c4
+00:C1CA 8D8802          	   396:         sta hibase
+00:C1CD 206CE5          	   397:         jsr setpnt
+                        	   398: 
+                        	   399:         ;; sprite X positions (low bytes; hi bits set below):
+                        	   400:         ;; cols 32-39 => X = sprx0 + i*8, i.e. 280,288,...,336.
+00:C1D0 A200            	   401:         ldx #0
+                        	   402: xlo$:
+00:C1D2 8A              	   403:         txa
+00:C1D3 0A              	   404:         asl
+00:C1D4 0A              	   405:         asl
+00:C1D5 18              	   406:         clc
+00:C1D6 6918            	   407:         adc #<sprx0
+00:C1D8 9D00D0          	   408:         sta sprxlo,x
+00:C1DB E8              	   409:         inx
+00:C1DC E8              	   410:         inx
+00:C1DD E010            	   411:         cpx #16
+00:C1DF D0F1            	   412:         bne xlo$
+                        	   413:         ;; sprite Y positions: all on text row 24 (Y = 50+24*8 = 242)
+00:C1E1 A9F2            	   414:         lda #spry0
+00:C1E3 A20E            	   415:         ldx #14
+                        	   416: ylo$:
+00:C1E5 9D01D0          	   417:         sta sprylo,x
+00:C1E8 CA              	   418:         dex
+00:C1E9 CA              	   419:         dex
+00:C1EA 10F9            	   420:         bpl ylo$
+                        	   421:         ;; colors: all white
+00:C1EC A901            	   422:         lda #$01
+00:C1EE A207            	   423:         ldx #7
+                        	   424: col$:
+00:C1F0 9D27D0          	   425:         sta sp0col,x
+00:C1F3 CA              	   426:         dex
+00:C1F4 10FA            	   427:         bpl col$
+                        	   428:         ;; enable sprites, set all X high bits (cols 32-39)
+00:C1F6 A9FF            	   429:         lda #$ff
+00:C1F8 8D10D0          	   430:         sta sprxhi
+00:C1FB 8D15D0          	   431:         sta spena
+                        	   432:         ;; draw the current time immediately
+00:C1FE 2003C2          	   433:         jsr print
+00:C201 58              	   434:         cli
+00:C202 60              	   435:         rts
+                        	   436: 
+                        	   437:         ;; Routine to update the 8 clock sprites
+                        	   438:         ;; from the BCD time (HH:MM:SS).
+                        	   439: print:
+00:C203 A200            	   440:         ldx #0           ;; sprite index
+00:C205 AD37C2          	   441:         lda hours
+00:C208 2029C2          	   442:         jsr digits$
+00:C20B A90A            	   443:         lda #10          ;; ':'
+00:C20D 2021C2          	   444:         jsr putdgt$
+00:C210 AD38C2          	   445:         lda minutes
+00:C213 2029C2          	   446:         jsr digits$
+00:C216 A90A            	   447:         lda #10          ;; ':'
+00:C218 2021C2          	   448:         jsr putdgt$
+00:C21B AD39C2          	   449:         lda seconds
+00:C21E 4C29C2          	   450:         jmp digits$
+                        	   451: 
+                        	   452:         ;; Write sprite pointer for glyph index in .A
+                        	   453: putdgt$:
+00:C221 18              	   454:         clc
+00:C222 6920            	   455:         adc #sprbase
+00:C224 9DF8C7          	   456:         sta sprptr,x
+00:C227 E8              	   457:         inx
+00:C228 60              	   458:         rts
+                        	   459: 
+                        	   460:         ;; Write pointers for the two BCD digits of .A
+                        	   461: digits$:
+00:C229 48              	   462:         pha
+00:C22A 4A              	   463:         lsr
+00:C22B 4A              	   464:         lsr
+00:C22C 4A              	   465:         lsr
+00:C22D 4A              	   466:         lsr
+00:C22E 2021C2          	   467:         jsr putdgt$       ;; tens digit
+00:C231 68              	   468:         pla
+00:C232 290F            	   469:         and #$0f
+00:C234 4C21C2          	   470:         jmp putdgt$       ;; ones digit
+                        	   471: 
+                        	   472:         ;; Persistent state must not use zero page: BASIC and the
+                        	   473:         ;; KERNAL use almost all of it as volatile working storage.
+00:C237 00              	   474: hours:   .byte 0          ;; Time in hours BCD
+00:C238 00              	   475: minutes: .byte 0          ;; Time in minutes BCD
+00:C239 00              	   476: seconds: .byte 0          ;; Time in seconds BCD
 
 
 Symbols by name:
-bin2bcd                          A:C0B4
+bin2bcd                          A:C0B1
 c2ddra                           E:DD02
 ci2cra                           E:DD0E
 ci2crb                           E:DD0F
@@ -524,19 +577,19 @@ facwrd                           E:B7F7
 frmnum                           E:AD8A
 glyphs                           E:C800
 hibase                           E:0288
-hours                            A:C23A
+hours                            A:C237
 illqua                           E:B248
-initspr                          A:C11D
-isr                              A:C0CF
+initspr                          A:C11A
+isr                              A:C0CC
 jtable                           A:C000
 linnum                           E:0014
-minutes                          A:C23B
+minutes                          A:C238
 nmivec                           E:0318
-print                            A:C206
+print                            A:C203
 ptr1                             E:005B
 ptr2                             E:005D
-restart                          A:C0A3
-seconds                          A:C23C
+restart                          A:C0A0
+seconds                          A:C239
 setpnt                           E:E56C
 settime                          A:C00C
 sp0col                           E:D027
@@ -548,8 +601,8 @@ sprxhi                           E:D010
 sprxlo                           E:D000
 spry0                            E:00F2
 sprylo                           E:D001
-start                            A:C066
-stop                             A:C09A
+start                            A:C063
+stop                             A:C097
 temp                             E:00FA
 vmcsb                            E:D018
 
@@ -569,16 +622,16 @@ B248 illqua
 B7F7 facwrd
 C000 jtable
 C00C settime
-C066 start
-C09A stop
-C0A3 restart
-C0B4 bin2bcd
-C0CF isr
-C11D initspr
-C206 print
-C23A hours
-C23B minutes
-C23C seconds
+C063 start
+C097 stop
+C0A0 restart
+C0B1 bin2bcd
+C0CC isr
+C11A initspr
+C203 print
+C237 hours
+C238 minutes
+C239 seconds
 C7F8 sprptr
 C800 glyphs
 D000 sprxlo

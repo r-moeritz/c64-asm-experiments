@@ -36,6 +36,46 @@ jcs:    .macro adr
 :
         .endm
 
+        ;; BCD +1 on \val; wrap to 0 at \lim, else branch to \tgt
+        ;; (seconds/minutes/hours roll over at 60/60/24)
+bump:   .macro val, lim, tgt
+        clc
+        lda \val
+        adc #1
+        sta \val
+        cmp #\lim
+        bne \tgt
+        lda #0
+        sta \val
+        .endm
+
+        ;; Copy \np 256-byte pages (ptr1),y -> (\dst),y (\inc2=1
+        ;; if the destination is a second pointer needing a bump)
+copyblk: .macro dst, np, inc2
+        ldx #\np
+:
+        ldy #0
+:
+        lda (ptr1),y
+        sta (\dst),y
+        iny
+        bne :-
+        inc ptr1+1
+        .if \inc2
+        inc \dst+1
+        .endif
+        dex
+        bne :--
+        .endm
+
+        ;; Store word \val (little-endian) at low/high pair \reg
+setw:   .macro reg, val
+        lda #<\val
+        sta \reg
+        lda #>\val
+        sta \reg+1
+        .endm
+
         ;; CIA2 registers
         ;; --------------
 ci2pra: .equ $dd00              ;.byte data port register A
@@ -114,35 +154,39 @@ jtable: jmp settime
         ;; E.g. SYS(49152) 11,51,20
 settime:
         ;; Hours
-        jsr getwrd$
-        lda linnum+1
-        jne illqua
-        lda linnum
-        cmp #24
-        jcs illqua
-        jsr bin2bcd
-        sta hours
+        lda #24
+        sta temp
+        setw ptr1, hours
+        jsr setfield$
         ;; Minutes
         jsr comma
-        jsr getwrd$
-        lda linnum+1
-        jne illqua
-        lda linnum
-        cmp #60
-        jcs illqua
-        jsr bin2bcd
-        sta minutes
+        lda #60
+        sta temp
+        setw ptr1, minutes
+        jsr setfield$
         ;; Seconds
         jsr comma
+        lda #60
+        sta temp
+        setw ptr1, seconds
+        jsr setfield$
+        jmp start
+
+        ;; Routine to read one HH:MM:SS field from BASIC, range check it
+        ;; against temp and store it as packed BCD in ptr1.
+        ;; temp: max value
+        ;; ptr1: pointer to location to store value
+setfield$:
         jsr getwrd$
         lda linnum+1
         jne illqua
         lda linnum
-        cmp #60
+        cmp temp
         jcs illqua
         jsr bin2bcd
-        sta seconds
-        jmp start
+        ldy #0
+        sta (ptr1),y
+        rts  
 
 getwrd$:
         jsr frmnum
@@ -154,15 +198,8 @@ getwrd$:
 start:
         jsr initspr      ;; build sprite glyphs, position/enable sprites
 
-        lda #$e7         ;; timer A = 20,455 (PAL)
-        sta ci2tia
-        lda #$4f
-        sta ci2tia+1
-        lda #50          ;; timer B = 50 A-underflows
-        sta ci2tib
-        lda #0
-        sta ci2tib+1
-
+        setw ci2tia, $4fe7      ;; timer A = 20,455 (PAL)
+        setw ci2tib, 50         ;; timer B = 50 A-underflows
         lda #%00010001
         sta ci2cra       ;; start timer A
         lda #%01010001
@@ -172,10 +209,8 @@ start:
         ora #%10000010
         sta ci2icr       ;; enable timer B -> NMI
 
-        lda #<isr        ;; hook NMI
-        sta nmivec
-        lda #>isr
-        sta nmivec+1
+        setw nmivec, isr        ;; hook NMI
+
         rts
 
         ;; Routine to stop the NMI timer
@@ -238,33 +273,9 @@ isr:
         beq exit$
 
         sed               ;; BCD +1 second, with 60/60/24 rollover
-        clc
-        lda seconds
-        adc #1
-        sta seconds
-        cmp #$60
-        bne done$         ;; seconds < 60: no carry
-
-        lda #0            ;; seconds == 60 -> wrap to :00
-        sta seconds
-        clc
-        lda minutes
-        adc #1
-        sta minutes
-        cmp #$60
-        bne done$         ;; minutes < 60: no carry
-
-        lda #0            ;; minutes == 60 -> wrap to :00
-        sta minutes
-        clc
-        lda hours
-        adc #1
-        sta hours
-        cmp #$24
-        bne done$         ;; hours < 24: no wrap
-
-        lda #0            ;; hours == 24 -> wrap to 00
-        sta hours
+        bump seconds, $60, done$      ;; seconds < 60: no carry
+        bump minutes, $60, done$      ;; minutes < 60: no carry
+        bump hours, $24, done$        ;; hours < 24: no wrap
 done$:
         cld
         jsr print
@@ -292,18 +303,7 @@ initspr:
         sta ptr1+1
         lda #$c4
         sta ptr2+1
-        ldx #4
-scr$:
-        ldy #0
-scrbyte$:
-        lda (ptr1),y
-        sta (ptr2),y
-        iny
-        bne scrbyte$
-        inc ptr1+1
-        inc ptr2+1
-        dex
-        bne scr$
+        copyblk ptr2, 4, 1
 
         ;; Copy all 2 KiB of the chargen ROM into the RAM beneath it.
         ;; Reads see ROM and writes to the same address reach RAM.
@@ -315,17 +315,7 @@ scrbyte$:
         sta ptr1
         lda #$d0
         sta ptr1+1
-        ldx #8
-chrpage$:
-        ldy #0
-chrbyte$:
-        lda (ptr1),y
-        sta (ptr1),y
-        iny
-        bne chrbyte$
-        inc ptr1+1
-        dex
-        bne chrpage$
+        copyblk ptr1, 8, 0
 
         ;; 11 glyphs: src = $d180 + g*8 ('0' = ASCII $30),
         ;;            dst = $c800 + g*64.
